@@ -1,0 +1,24 @@
+{
+	"name": "signate-competition-202607",
+	"build": {
+	  "dockerfile": "../Dockerfile"
+	},
+	"customizations": {
+	  "vscode": {
+		"settings": {
+		  "terminal.integrated.defaultProfile.linux": "bash"
+		},
+		"extensions": [
+		  "ms-python.python",
+		  "kevinrose.vsc-python-indent",
+		  "mhutchie.git-graph",
+		  "eamodio.gitlens",
+		  "charliermarsh.ruff"
+		]
+	  }
+	},
+	"forwardPorts": [8000],
+	"remoteUser": "root",
+	"runArgs": ["--gpus", "all"],
+	"postCreateCommand": "uv sync --no-cache"
+}

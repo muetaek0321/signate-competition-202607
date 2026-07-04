@@ -1,0 +1,39 @@
+[project]
+name = "signate-competition-202607"
+version = "0.1.0"
+description = "「AI Engineering Challenge ～煩雑な社内ドライブをハックせよ～」"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.11",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "C",
+    "B",
+    "UP",
+]
+ignore = ["E501", "C901", "UP015"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+combine-as-imports = true
