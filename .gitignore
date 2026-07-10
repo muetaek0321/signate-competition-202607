@@ -170,8 +170,9 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+check_result/
 pretrained/
-chroma/
-output*.md
-output*.json
-*_context.txt
+chroma*/
+results/
+
+share/

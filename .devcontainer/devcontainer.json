@@ -13,7 +13,8 @@
 		  "kevinrose.vsc-python-indent",
 		  "mhutchie.git-graph",
 		  "eamodio.gitlens",
-		  "charliermarsh.ruff"
+		  "charliermarsh.ruff",
+		  "ms-toolsai.jupyter"
 		]
 	  }
 	},
