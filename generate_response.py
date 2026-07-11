@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage
 from langchain_ollama import ChatOllama
 from sentence_transformers import CrossEncoder
 
+from modules.bm25_search import BM25DocumentSearch
 from modules.rag_prompt import RAG_PROMPT_TEMPLATE
 
 # 環境変数の読み込み
@@ -64,13 +65,8 @@ def main() -> None:
         persist_directory=os.getenv("DATASET_DIR", "./resource/chroma"),
         collection_name="shared_folder_excel_documents",
     )
-    # # BM25Retrieverの読み込み
-    # saved_docs = joblib.load("./resource/all_documents.joblib")
-    # bm25_retriever = BM25Retriever.from_texts(
-    #     saved_docs,
-    #     preprocess_func=,
-    #     k=50,
-    # )
+    # BM25Retrieverの読み込み
+    bm25 = BM25DocumentSearch()
     # Rerankerモデルの読み込み
     reranker = CrossEncoder(
         os.getenv("RERANKER_MODEL_NAME", None),
@@ -85,7 +81,6 @@ def main() -> None:
         print(idx, input_question)
 
         # ベクトルDBから検索
-        # docs = vectorstore.similarity_search(query=input_question, k=50)
         docs = vectorstore_all.max_marginal_relevance_search(
             query=input_question,
             k=50,
@@ -107,7 +102,10 @@ def main() -> None:
                 lambda_mult=0.5,
             )
 
-        # ベクトル検索した類似文書をリランキング
+        # BM25Retrieverから検索
+        docs += bm25(input_question)
+
+        # 検索した類似文書をリランキング
         question_answer_list = [
             (input_question, f"{doc.metadata}\n{doc.page_content}") for doc in docs
         ]
