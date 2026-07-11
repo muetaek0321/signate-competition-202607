@@ -170,7 +170,7 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-check_result/
+resource/
 pretrained/
 chroma*/
 results/

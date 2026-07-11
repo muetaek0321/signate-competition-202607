@@ -14,7 +14,7 @@ def csv_loader(path: Path) -> list[Document]:
     for chunk in df_chunk:
         start_row = chunk.index[0] + 1
         end_row = chunk.index[-1] + 1
-        add_info = f"# {str(path)}の記載内容（{start_row}行目～{end_row}行目）\n\n"
+        add_info = f"# （{start_row}行目～{end_row}行目）\n\n"
         row_content = ",\n".join(
             "  " + row.to_json(force_ascii=False) for _, row in chunk.iterrows()
         )
@@ -24,7 +24,7 @@ def csv_loader(path: Path) -> list[Document]:
             Document(
                 page_content=page_content,
                 metadata={
-                    "source": path,
+                    "source": str(path),
                     "start_row": start_row,
                     "end_row": end_row,
                 },
@@ -52,7 +52,7 @@ def excel_loader(path: Path) -> list[Document]:
     for start_row in range(0, len(df), chunksize):
         end_row = start_row + chunksize
         chunk = df.iloc[start_row:end_row]
-        add_info = f"# {str(path)}の記載内容（{start_row}行目～{end_row}行目）\n\n"
+        add_info = f"# （{start_row}行目～{end_row}行目）\n\n"
         row_content = []
         for _, row in chunk.iterrows():
             try:
@@ -68,7 +68,7 @@ def excel_loader(path: Path) -> list[Document]:
             Document(
                 page_content=page_content,
                 metadata={
-                    "source": path,
+                    "source": str(path),
                     "start_row": start_row,
                     "end_row": end_row,
                 },
@@ -89,31 +89,36 @@ def notebook_loader(path: Path) -> Document:
     # TODO: base64の画像を読み込めるか検討する
 
     # セルごとに処理
-    nb_content = [f"# {str(path)}の記載内容"]
+    docs = []
     for cell in nb["cells"]:
         cell_type = cell["cell_type"]
         if cell_type == "markdown":
             source = cell["source"]
             if "data:image/png" in source:
                 continue  # 画像データは一旦スキップ
-            nb_content.append(f"\n```markdown\n{source}\n```")
+            docs.append(
+                Document(
+                    page_content=f"\n```markdown\n{source}\n```",
+                    metadata={"source": str(path)},
+                )
+            )
         elif cell_type == "code":
             source = cell["source"]
             code_content = f"\n```python\n{source}\n```"
             if (len(cell["outputs"]) > 0) and ("text" in cell["outputs"][0].keys()):
                 outputs = cell["outputs"][0]["text"]  # 一旦テキストのみ
                 code_content += f"\n出力結果：\n{outputs}"
-            nb_content.append(code_content)
-
-    doc = Document(
-        page_content="\n\n".join(nb_content),
-        metadata={"source": path},
-    )
+            docs.append(
+                Document(
+                    page_content=code_content,
+                    metadata={"source": str(path)},
+                )
+            )
 
     # with open("./check_result/ipynb_conv.md", mode="w", encoding="utf-8-sig") as f:
     #     f.write(doc.page_content)
 
-    return doc
+    return docs
 
 
 if __name__ == "__main__":

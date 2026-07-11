@@ -4,27 +4,17 @@ import time
 from pathlib import Path
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-os.environ["HF_HOME"] = "./pretrained"  # 事前学習モデルの保存先指定
+os.environ["HF_HOME"] = "./resource/pretrained"  # 事前学習モデルの保存先指定
 
 import pandas as pd
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
-from langchain_community.document_loaders import (
-    CSVLoader,
-    NotebookLoader,
-    PyPDFLoader,
-    PythonLoader,
-    TextLoader,
-    UnstructuredExcelLoader,
-    UnstructuredPowerPointLoader,
-    UnstructuredWordDocumentLoader,
-)
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.messages import HumanMessage
 from langchain_ollama import ChatOllama
 from sentence_transformers import CrossEncoder
 
-from rag_prompt import RAG_PROMPT_TEMPLATE
+from modules.rag_prompt import RAG_PROMPT_TEMPLATE
 
 # 環境変数の読み込み
 load_dotenv()
@@ -59,42 +49,63 @@ def main() -> None:
         model_kwargs={"device": "cuda", "trust_remote_code": True},
     )
     # ベクトルDBの読み込み
-    vectorstore = Chroma(
+    vectorstore_all = Chroma(
         embedding_function=embedding,
-        persist_directory=os.getenv("DATASET_DIR", "./chroma"),
-        collection_name="shared_folder_documents",
+        persist_directory=os.getenv("DATASET_DIR", "./resource/chroma"),
+        collection_name="shared_folder_all_documents",
     )
+    vectorstore_csv = Chroma(
+        embedding_function=embedding,
+        persist_directory=os.getenv("DATASET_DIR", "./resource/chroma"),
+        collection_name="shared_folder_csv_documents",
+    )
+    vectorstore_excel = Chroma(
+        embedding_function=embedding,
+        persist_directory=os.getenv("DATASET_DIR", "./resource/chroma"),
+        collection_name="shared_folder_excel_documents",
+    )
+    # # BM25Retrieverの読み込み
+    # saved_docs = joblib.load("./resource/all_documents.joblib")
+    # bm25_retriever = BM25Retriever.from_texts(
+    #     saved_docs,
+    #     preprocess_func=,
+    #     k=50,
+    # )
     # Rerankerモデルの読み込み
     reranker = CrossEncoder(
         os.getenv("RERANKER_MODEL_NAME", None),
         device="cuda",
     )
 
-    loaders = {
-        ".csv": CSVLoader,
-        ".tsv": lambda path: CSVLoader(path, csv_args={"delimiter": "\t"}),
-        ".docx": UnstructuredWordDocumentLoader,
-        ".pptx": UnstructuredPowerPointLoader,
-        ".xlsx": UnstructuredExcelLoader,
-        ".json": TextLoader,
-        ".py": PythonLoader,
-        ".ipynb": NotebookLoader,
-        ".pdf": PyPDFLoader,
-        ".txt": TextLoader,
-        ".md": TextLoader,
-        ".toml": TextLoader,
-        ".lock": TextLoader,
-    }
-
     # 質問に対する回答の生成
-    answers = {"index": [], "question": [], "answer": [], "reason": []}
+    answers = {"index": [], "question": [], "answer": [], "reason": [], "files": []}
     for idx, row in question_df.iterrows():
         start_time = time.perf_counter()
         input_question = row["question"]
         print(idx, input_question)
 
         # ベクトルDBから検索
-        docs = vectorstore.similarity_search(query=input_question, k=50)
+        # docs = vectorstore.similarity_search(query=input_question, k=50)
+        docs = vectorstore_all.max_marginal_relevance_search(
+            query=input_question,
+            k=50,
+            fetch_k=100,
+            lambda_mult=0.5,
+        )
+        if "csv" in input_question.lower():
+            docs += vectorstore_csv.max_marginal_relevance_search(
+                query=input_question,
+                k=20,
+                fetch_k=50,
+                lambda_mult=0.5,
+            )
+        if "excel" in input_question.lower() or "xlsx" in input_question.lower():
+            docs += vectorstore_excel.max_marginal_relevance_search(
+                query=input_question,
+                k=20,
+                fetch_k=50,
+                lambda_mult=0.5,
+            )
 
         # ベクトル検索した類似文書をリランキング
         question_answer_list = [
@@ -106,22 +117,12 @@ def main() -> None:
         source_list = sorted(set(source_list), key=source_list.index)[:5]
 
         top_docs = []
-        # for source in source_list:
-        #     ext = Path(source).suffix
-        #     if ext in loaders:
-        #         loader = loaders[ext](source)
-        #         docs = loader.load()
-
-        #         if ext == [".csv", ".tsv"]:
-        #             docs = docs[:30]  # CSV, TSV, Excelは30件までに制限
-
-        #         top_docs.extend(docs)
         for source in source_list:
             ext = Path(source).suffix
             if ext in [".csv", ".tsv"]:
                 # "source"が一致するもののうち上位10件を取得
                 top_docs += [doc for doc, _ in reranked_docs if doc.metadata["source"] == source][
-                    :10
+                    :5
                 ]
             else:
                 # "source"が一致するもののうち上位3件を取得
@@ -156,8 +157,9 @@ def main() -> None:
         # 生成された返答内容を格納
         answers["index"].append(row["index"])
         answers["question"].append(input_question)
-        answers["answer"].append(response_dict["answer"])
+        answers["answer"].append(response_dict["answer"].replace("\n", ""))
         answers["reason"].append(response_dict["reason"])
+        answers["files"].append(",".join(source_list))
 
         generate_time = time.perf_counter() - start_time
         print(f"返答の生成時間: {generate_time:.2f}s")
