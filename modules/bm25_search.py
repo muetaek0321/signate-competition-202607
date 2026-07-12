@@ -1,14 +1,16 @@
+from pathlib import Path
+
 import joblib
 from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents import Document
 from sudachipy import Dictionary
 
-DOCUMENT_CACHE_PATH = "./resource/all_documents.joblib"
+DOCUMENT_CACHE_NAME = "all_documents.joblib"
 
 
 class BM25DocumentSearch:
-    def __init__(self, k: int = 50) -> None:
-        self.all_docs = joblib.load(DOCUMENT_CACHE_PATH)
+    def __init__(self, dir_path: Path, k: int = 50) -> None:
+        self.all_docs = joblib.load(dir_path / DOCUMENT_CACHE_NAME)
         self.tokenizer = Dictionary(dict="full").create()
 
         self.bm25_retriever = BM25Retriever.from_documents(

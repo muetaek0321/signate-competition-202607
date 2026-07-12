@@ -12,6 +12,7 @@ from langchain_chroma import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.messages import HumanMessage
 from langchain_ollama import ChatOllama
+from langchain_ollama.embeddings import OllamaEmbeddings
 from sentence_transformers import CrossEncoder
 
 from modules.bm25_search import BM25DocumentSearch
@@ -22,12 +23,13 @@ load_dotenv()
 
 
 def main() -> None:
+    persist_directory = Path(os.getenv("DATASET_DIR", "./resource/chroma"))
+
     # 出力先フォルダの作成
     output_path = Path("./results")
     output_path.mkdir(exist_ok=True)
 
     # 質問データの読み込み
-    # question_df = pd.read_csv("./share/質問回答/questions_valid.csv", encoding="utf-8")
     question_df = pd.read_csv("./share/質問回答/questions_test.csv", encoding="utf-8")
 
     # モデルのセットアップ
@@ -45,28 +47,40 @@ def main() -> None:
     # )
 
     # Embeddingモデルの読み込み
-    embedding = HuggingFaceEmbeddings(
-        model_name=os.getenv("EMBEDDING_MODEL_NAME", None),
-        model_kwargs={"device": "cuda", "trust_remote_code": True},
-    )
+    embedding_mode = os.getenv("EMBEDDING_MODE", "huggingface")
+    if embedding_mode == "huggingface":
+        embedding = HuggingFaceEmbeddings(
+            model_name=os.getenv("EMBEDDING_MODEL_NAME", None),
+            model_kwargs={"device": "cuda", "trust_remote_code": True},
+        )
+    elif embedding_mode == "ollama":
+        embedding = OllamaEmbeddings(model=os.getenv("EMBEDDING_MODEL_NAME", None))
+    else:
+        raise ValueError(f"Invalid EMBEDDING_MODE: {embedding_mode}")
+
     # ベクトルDBの読み込み
     vectorstore_all = Chroma(
         embedding_function=embedding,
-        persist_directory=os.getenv("DATASET_DIR", "./resource/chroma"),
+        persist_directory=persist_directory,
         collection_name="shared_folder_all_documents",
     )
     vectorstore_csv = Chroma(
         embedding_function=embedding,
-        persist_directory=os.getenv("DATASET_DIR", "./resource/chroma"),
+        persist_directory=persist_directory,
         collection_name="shared_folder_csv_documents",
     )
     vectorstore_excel = Chroma(
         embedding_function=embedding,
-        persist_directory=os.getenv("DATASET_DIR", "./resource/chroma"),
+        persist_directory=persist_directory,
         collection_name="shared_folder_excel_documents",
     )
+    vectorstore_file_info = Chroma(
+        embedding_function=embedding,
+        persist_directory=persist_directory,
+        collection_name="shared_folder_file_info_list",
+    )
     # BM25Retrieverの読み込み
-    bm25 = BM25DocumentSearch()
+    bm25 = BM25DocumentSearch(dir_path=persist_directory, k=30)
     # Rerankerモデルの読み込み
     reranker = CrossEncoder(
         os.getenv("RERANKER_MODEL_NAME", None),
@@ -80,6 +94,20 @@ def main() -> None:
         input_question = row["question"]
         print(idx, input_question)
 
+        # ファイル情報のベクトルDBから検索対象ファイルを取得
+        file_info_docs = vectorstore_file_info.similarity_search(query=input_question, k=5)
+        # 検索結果からファイルパスを拡張子ごとに取得
+        files, csv_files, excel_files = [], [], []
+        for doc in file_info_docs:
+            source = doc.metadata["source"]
+            ext = Path(source).suffix
+            if ext == ".csv":
+                csv_files.append(source)
+            elif ext == ".xlsx":
+                excel_files.append(source)
+            else:
+                files.append(source)
+
         # ベクトルDBから検索
         docs = vectorstore_all.max_marginal_relevance_search(
             query=input_question,
@@ -87,23 +115,43 @@ def main() -> None:
             fetch_k=100,
             lambda_mult=0.5,
         )
-        if "csv" in input_question.lower():
+        if len(files) > 0:
+            docs += vectorstore_all.max_marginal_relevance_search(
+                query=input_question,
+                k=20,
+                fetch_k=100,
+                lambda_mult=0.5,
+                filter={"source": {"$in": files}},
+            )
+        if len(csv_files) > 0:
             docs += vectorstore_csv.max_marginal_relevance_search(
                 query=input_question,
                 k=20,
                 fetch_k=50,
                 lambda_mult=0.5,
+                filter={"source": {"$in": csv_files}},
             )
-        if "excel" in input_question.lower() or "xlsx" in input_question.lower():
+        if len(excel_files) > 0:
             docs += vectorstore_excel.max_marginal_relevance_search(
                 query=input_question,
                 k=20,
                 fetch_k=50,
                 lambda_mult=0.5,
+                filter={"source": {"$in": excel_files}},
             )
 
         # BM25Retrieverから検索
         docs += bm25(input_question)
+
+        # page_contentが重複するドキュメントを削除
+        seen_contents = set()
+        unique_docs = []
+        for doc in docs:
+            content = doc.page_content
+            if content not in seen_contents:
+                seen_contents.add(content)
+                unique_docs.append(doc)
+        docs = unique_docs
 
         # 検索した類似文書をリランキング
         question_answer_list = [
@@ -111,22 +159,7 @@ def main() -> None:
         ]
         scores = reranker.predict(question_answer_list)
         reranked_docs = sorted(zip(docs, scores), key=lambda x: x[1], reverse=True)
-        source_list = [doc.metadata["source"] for doc, _ in reranked_docs]
-        source_list = sorted(set(source_list), key=source_list.index)[:5]
-
-        top_docs = []
-        for source in source_list:
-            ext = Path(source).suffix
-            if ext in [".csv", ".tsv"]:
-                # "source"が一致するもののうち上位10件を取得
-                top_docs += [doc for doc, _ in reranked_docs if doc.metadata["source"] == source][
-                    :5
-                ]
-            else:
-                # "source"が一致するもののうち上位3件を取得
-                top_docs += [doc for doc, _ in reranked_docs if doc.metadata["source"] == source][
-                    :3
-                ]
+        top_docs = [doc for doc, _ in reranked_docs][:10]
 
         # RAGプロンプトに埋め込むために成形
         context = "\n".join(
@@ -157,7 +190,7 @@ def main() -> None:
         answers["question"].append(input_question)
         answers["answer"].append(response_dict["answer"].replace("\n", ""))
         answers["reason"].append(response_dict["reason"])
-        answers["files"].append(",".join(source_list))
+        answers["files"].append(",".join([doc.metadata["source"] for doc in top_docs]))
 
         generate_time = time.perf_counter() - start_time
         print(f"返答の生成時間: {generate_time:.2f}s")

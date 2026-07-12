@@ -18,12 +18,12 @@ from langchain_community.document_loaders import (
     UnstructuredWordDocumentLoader,
 )
 from langchain_core.documents import Document
+from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_ollama.embeddings import OllamaEmbeddings
 from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
 
 from modules.custom_document_loader import csv_loader, notebook_loader
-
-# from langchain_huggingface.embeddings import HuggingFaceEmbeddings
+from modules.file_info_format import FILE_INFO_FORMAT_INTERNAL, FILE_INFO_FORMAT_PROJECT
 
 # 環境変数の読み込み
 load_dotenv()
@@ -71,11 +71,16 @@ def main() -> None:
     )
 
     # ベクトル化する準備
-    # embedding = HuggingFaceEmbeddings(
-    #     model_name=os.getenv("EMBEDDING_MODEL_NAME", None),
-    #     model_kwargs={"device": "cuda", "trust_remote_code": True},
-    # )
-    embedding = OllamaEmbeddings(model=os.getenv("EMBEDDING_MODEL_NAME", None))
+    embedding_mode = os.getenv("EMBEDDING_MODE", "huggingface")
+    if embedding_mode == "huggingface":
+        embedding = HuggingFaceEmbeddings(
+            model_name=os.getenv("EMBEDDING_MODEL_NAME", None),
+            model_kwargs={"device": "cuda", "trust_remote_code": True},
+        )
+    elif embedding_mode == "ollama":
+        embedding = OllamaEmbeddings(model=os.getenv("EMBEDDING_MODEL_NAME", None))
+    else:
+        raise ValueError(f"Invalid EMBEDDING_MODE: {embedding_mode}")
 
     # 全ファイルを読み込みリスト化
     vectorstores = {
@@ -94,15 +99,19 @@ def main() -> None:
             persist_directory=persist_directory,
             collection_name="shared_folder_excel_documents",
         ),
+        "shared_folder_file_info_list": Chroma(
+            embedding_function=embedding,
+            persist_directory=persist_directory,
+            collection_name="shared_folder_file_info_list",
+        ),
     }
 
     batchsize = 500
-    all_file_list = list(Path(os.getenv("TARGET_DIR", "./")).glob("**/*"))
+    all_file_list = [
+        path for path in Path(os.getenv("TARGET_DIR", "./")).glob("**/*") if path.is_file()
+    ]
     num_files = len(all_file_list)
     for i, path in enumerate(all_file_list, start=1):
-        if not path.is_file():
-            continue
-
         ext = path.suffix.lower()
         print(f"[{i}/{num_files}][{ext}] {str(path)}")
 
@@ -175,7 +184,7 @@ def main() -> None:
                 all_docs.extend(docs)
                 if docs:
                     vectorstores["shared_folder_all_documents"].add_documents(docs, ids=ids)
-            elif ext in [".json", ".txt", ".md", ".toml", ".lock"]:
+            elif ext in [".json", ".txt", ".md", ".toml"]:
                 docs = TextLoader(path).load()
                 docs = text_splitter.split_documents(docs)
                 docs, ids = docs_ids(docs, path)
@@ -199,6 +208,24 @@ def main() -> None:
             encoding="utf-8-sig",
             index=None,
         )
+
+        # ファイル情報のベクトル化
+        path_parts = path.parts
+        if path_parts[2] == "プロジェクト":
+            file_info_str = FILE_INFO_FORMAT_PROJECT.format(
+                filename=path.name,
+                directory_type=path_parts[2],
+                company_name=path_parts[3],
+                category=path_parts[4],
+            )
+        else:
+            file_info_str = FILE_INFO_FORMAT_INTERNAL.format(
+                filename=path.name,
+                directory_type=path_parts[2],
+            )
+        file_info_doc = Document(page_content=file_info_str, metadata={"source": str(path)})
+        vectorstores["shared_folder_file_info_list"].add_documents([file_info_doc], ids=[str(path)])
+
         # Documentをjoblibで保存
         joblib.dump(all_docs, all_docs_cache_path)
 
@@ -209,11 +236,16 @@ if __name__ == "__main__":
     # test
     query = "恒一会 かえで総合病院の提案書内で、重視するとされている評価指標を答えてください。"
 
-    # embedding = HuggingFaceEmbeddings(
-    #     model_name=os.getenv("EMBEDDING_MODEL_NAME", None),
-    #     model_kwargs={"device": "cuda", "trust_remote_code": True},
-    # )
-    embedding = OllamaEmbeddings(model=os.getenv("EMBEDDING_MODEL_NAME", None))
+    embedding_mode = os.getenv("EMBEDDING_MODE", "huggingface")
+    if embedding_mode == "huggingface":
+        embedding = HuggingFaceEmbeddings(
+            model_name=os.getenv("EMBEDDING_MODEL_NAME", None),
+            model_kwargs={"device": "cuda", "trust_remote_code": True},
+        )
+    elif embedding_mode == "ollama":
+        embedding = OllamaEmbeddings(model=os.getenv("EMBEDDING_MODEL_NAME", None))
+    else:
+        raise ValueError(f"Invalid EMBEDDING_MODE: {embedding_mode}")
 
     # ベクトルDBから検索
     vectorstore = Chroma(
