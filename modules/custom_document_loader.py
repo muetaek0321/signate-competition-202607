@@ -81,7 +81,7 @@ def excel_loader(path: Path) -> list[Document]:
     return docs
 
 
-def notebook_loader(path: Path) -> Document:
+def notebook_loader(path: Path) -> list[Document]:
     # ipynbファイルを読み込み
     with open(path, mode="r", encoding="utf-8-sig") as f:
         nb = nbformat.read(f, as_version=4)
