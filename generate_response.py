@@ -1,6 +1,7 @@
 import json
 import os
 import time
+from argparse import ArgumentParser
 from pathlib import Path
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -11,6 +12,7 @@ from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.messages import HumanMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
 from langchain_ollama.embeddings import OllamaEmbeddings
 from sentence_transformers import CrossEncoder
@@ -23,6 +25,10 @@ load_dotenv()
 
 
 def main() -> None:
+    parser = ArgumentParser()
+    parser.add_argument("--resume", action="store_true")
+    args = parser.parse_args()
+
     persist_directory = Path(os.getenv("DATASET_DIR", "./resource/chroma"))
 
     # 出力先フォルダの作成
@@ -34,17 +40,25 @@ def main() -> None:
 
     # モデルのセットアップ
     ## Ollama-Cloudを使用
-    llm = ChatOllama(
-        model=os.getenv("OLLAMA_MODEL_NAME", "gpt-oss:120b"),
-        base_url="https://ollama.com",
-        api_key=os.getenv("OLLAMA_API_KEY", None),
-        temperature=0.0,
-    )
-    ## ローカルLLMを使用
-    # llm = ChatOllama(
-    #     model=os.getenv("OLLAMA_MODEL_NAME", "gpt-oss:120b"),
-    #     temperature=0.0,
-    # )
+    generate_mode = os.getenv("GENERATE_MODE", "ollama")
+    if generate_mode == "ollama":
+        llm = ChatOllama(
+            model=os.getenv("OLLAMA_MODEL_NAME", "gpt-oss:120b"),
+            base_url="https://ollama.com",
+            api_key=os.getenv("OLLAMA_API_KEY", None),
+            temperature=0.0,
+        )
+        ## ローカルLLMを使用
+        # llm = ChatOllama(
+        #     model=os.getenv("OLLAMA_MODEL_NAME", "gpt-oss:120b"),
+        #     temperature=0.0,
+        # )
+    elif generate_mode == "gemini":
+        llm = ChatGoogleGenerativeAI(
+            model=os.getenv("GEMINI_MODEL_NAME", "models/gemini-3.1-flash-lite"),
+            temperature=0.0,
+            thinking_budget=4096,
+        )
 
     # Embeddingモデルの読み込み
     embedding_mode = os.getenv("EMBEDDING_MODE", "huggingface")
@@ -87,12 +101,22 @@ def main() -> None:
         device="cuda",
     )
 
+    # 途中再開か新規作成かで分岐
+    if args.resume:
+        answer_df = pd.read_csv(output_path / "result_generated.csv", encoding="utf-8-sig")
+        answers = answer_df.to_dict(orient="list")
+    else:
+        answers = {"index": [], "question": [], "answer": [], "reason": [], "files": []}
+
     # 質問に対する回答の生成
-    answers = {"index": [], "question": [], "answer": [], "reason": [], "files": []}
     for idx, row in question_df.iterrows():
         start_time = time.perf_counter()
         input_question = row["question"]
         print(idx, input_question)
+
+        if row["index"] in answers["index"]:
+            print("  回答済みのためスキップ")
+            continue
 
         # ファイル情報のベクトルDBから検索対象ファイルを取得
         file_info_docs = vectorstore_file_info.similarity_search(query=input_question, k=5)
@@ -175,9 +199,14 @@ def main() -> None:
         # 返答の生成
         response = llm.invoke(input_messages)
 
+        if generate_mode == "gemini":
+            response_text = response.content[0]["text"]
+        else:
+            response_text = response.content
+
         # 返答の変換
         try:
-            response_dict = json.loads(response.content)
+            response_dict = json.loads(response_text)
         except Exception as e:
             response_dict = {
                 "answer": response.content.replace("\n", ""),
