@@ -1,6 +1,7 @@
+from __future__ import annotations
+
 from pathlib import Path
 
-import nbformat
 import pandas as pd
 from langchain_core.documents import Document
 
@@ -81,46 +82,6 @@ def excel_loader(path: Path) -> list[Document]:
     return docs
 
 
-def notebook_loader(path: Path) -> list[Document]:
-    # ipynbファイルを読み込み
-    with open(path, mode="r", encoding="utf-8-sig") as f:
-        nb = nbformat.read(f, as_version=4)
-
-    # TODO: base64の画像を読み込めるか検討する
-
-    # セルごとに処理
-    docs = []
-    for cell in nb["cells"]:
-        cell_type = cell["cell_type"]
-        if cell_type == "markdown":
-            source = cell["source"]
-            if "data:image/png" in source:
-                continue  # 画像データは一旦スキップ
-            docs.append(
-                Document(
-                    page_content=f"\n```markdown\n{source}\n```",
-                    metadata={"source": str(path)},
-                )
-            )
-        elif cell_type == "code":
-            source = cell["source"]
-            code_content = f"\n```python\n{source}\n```"
-            if (len(cell["outputs"]) > 0) and ("text" in cell["outputs"][0].keys()):
-                outputs = cell["outputs"][0]["text"]  # 一旦テキストのみ
-                code_content += f"\n出力結果：\n{outputs}"
-            docs.append(
-                Document(
-                    page_content=code_content,
-                    metadata={"source": str(path)},
-                )
-            )
-
-    # with open("./check_result/ipynb_conv.md", mode="w", encoding="utf-8-sig") as f:
-    #     f.write(doc.page_content)
-
-    return docs
-
-
 if __name__ == "__main__":
     # 単体テスト
 
@@ -133,11 +94,5 @@ if __name__ == "__main__":
     excel_loader(
         path=Path(
             "./share/共有ドライブ/プロジェクト/株式会社青嶺不動産アセットマネジメント/03.データ/train.xlsx"
-        )
-    )
-
-    notebook_loader(
-        path=Path(
-            "./share/共有ドライブ/プロジェクト/白峰信用リスク評価株式会社/04.分析/analysis_project/notebooks/01_eda_old.ipynb"
         )
     )

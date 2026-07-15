@@ -1,4 +1,6 @@
+import json
 import os
+import traceback
 from pathlib import Path
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
@@ -22,7 +24,13 @@ from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_ollama.embeddings import OllamaEmbeddings
 from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
 
-from modules.custom_document_loader import csv_loader, notebook_loader
+from modules.custom_document_loader import csv_loader
+from modules.custom_loader import (
+    ExcelStyleLoader,
+    ImageDocumentLoader,
+    NotebookCellLoader,
+    WordDocumentStyleLoader,
+)
 from modules.file_info_format import FILE_INFO_FORMAT_INTERNAL, FILE_INFO_FORMAT_PROJECT
 
 # 環境変数の読み込み
@@ -106,6 +114,7 @@ def main() -> None:
         ),
     }
 
+    error_logs = []
     batchsize = 500
     all_file_list = [
         path for path in Path(os.getenv("TARGET_DIR", "./")).glob("**/*") if path.is_file()
@@ -121,6 +130,7 @@ def main() -> None:
 
         try:
             if ext == ".csv":
+                continue
                 docs = csv_loader(path)
                 docs = text_splitter.split_documents(docs)
                 docs, ids = docs_ids(docs, path)
@@ -128,19 +138,22 @@ def main() -> None:
                 if docs:
                     for i in range(0, len(docs), batchsize):
                         batch_docs = docs[i : i + batchsize]
+                        batch_ids = ids[i : i + batchsize]
                         vectorstores["shared_folder_csv_documents"].add_documents(
-                            batch_docs, ids=ids[i : i + batchsize]
+                            batch_docs, ids=batch_ids
                         )
             elif ext == ".xlsx":
                 docs = UnstructuredExcelLoader(path).load()
+                docs += ExcelStyleLoader(path).load()
                 docs = text_splitter.split_documents(docs)
                 docs, ids = docs_ids(docs, path)
                 all_docs.extend(docs)
                 if docs:
                     for i in range(0, len(docs), batchsize):
                         batch_docs = docs[i : i + batchsize]
+                        batch_ids = ids[i : i + batchsize]
                         vectorstores["shared_folder_excel_documents"].add_documents(
-                            batch_docs, ids=ids[i : i + batchsize]
+                            batch_docs, ids=batch_ids
                         )
             elif ext == ".tsv":
                 docs = CSVLoader(path, csv_args={"delimiter": "\t"}).load()
@@ -148,9 +161,15 @@ def main() -> None:
                 docs, ids = docs_ids(docs, path)
                 all_docs.extend(docs)
                 if docs:
-                    vectorstores["shared_folder_all_documents"].add_documents(docs, ids=ids)
+                    for i in range(0, len(docs), batchsize):
+                        batch_docs = docs[i : i + batchsize]
+                        batch_ids = ids[i : i + batchsize]
+                        vectorstores["shared_folder_all_documents"].add_documents(
+                            batch_docs, ids=batch_ids
+                        )
             elif ext == ".docx":
                 docs = UnstructuredWordDocumentLoader(path).load()
+                docs += WordDocumentStyleLoader(path).load()
                 docs = text_splitter.split_documents(docs)
                 docs, ids = docs_ids(docs, path)
                 all_docs.extend(docs)
@@ -171,7 +190,7 @@ def main() -> None:
                 if docs:
                     vectorstores["shared_folder_all_documents"].add_documents(docs, ids=ids)
             elif ext == ".ipynb":
-                docs = notebook_loader(path)
+                docs = NotebookCellLoader(file_path=path).load()
                 docs = text_splitter.split_documents(docs)
                 docs, ids = docs_ids(docs, path)
                 all_docs.extend(docs)
@@ -184,8 +203,14 @@ def main() -> None:
                 all_docs.extend(docs)
                 if docs:
                     vectorstores["shared_folder_all_documents"].add_documents(docs, ids=ids)
+            elif ext in [".png", ".jpg", "jpeg", ".bmp", ".tiff"]:
+                docs = ImageDocumentLoader(path).load()
+                docs, ids = docs_ids(docs, path)
+                all_docs.extend(docs)
+                if docs:
+                    vectorstores["shared_folder_all_documents"].add_documents(docs, ids=ids)
             elif ext in [".json", ".txt", ".md", ".toml"]:
-                docs = TextLoader(path).load()
+                docs = TextLoader(path, encoding="utf-8").load()
                 docs = text_splitter.split_documents(docs)
                 docs, ids = docs_ids(docs, path)
                 all_docs.extend(docs)
@@ -195,7 +220,10 @@ def main() -> None:
                 print("  未対応拡張子のためスキップ")
                 continue
         except Exception as e:
-            print(f"  読み込みに失敗したためスキップ: {e}")
+            print(f"  読み込みエラーのためスキップ: {e}")
+            error_logs.append({"file": str(path), "traceback": traceback.format_exc()})
+            with open(persist_directory / "error_log.json", "w", encoding="utf-8") as f:
+                json.dump(error_logs, f, ensure_ascii=False, indent=2)
             continue
 
         # ファイルの情報を記録してファイル情報をCSVで保存
@@ -223,7 +251,10 @@ def main() -> None:
                 filename=path.name,
                 directory_type=path_parts[2],
             )
-        file_info_doc = Document(page_content=file_info_str, metadata={"source": str(path)})
+        file_info_doc = Document(
+            page_content=file_info_str,
+            metadata={"source": str(path), "directory": str(path.parent)},
+        )
         vectorstores["shared_folder_file_info_list"].add_documents([file_info_doc], ids=[str(path)])
 
         # Documentをjoblibで保存
