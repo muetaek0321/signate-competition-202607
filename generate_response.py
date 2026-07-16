@@ -19,13 +19,10 @@ from langchain_ollama.embeddings import OllamaEmbeddings
 from sentence_transformers import CrossEncoder
 
 from modules.bm25_search import BM25DocumentSearch
-from modules.rag_prompt import RAG_PROMPT_TEMPLATE
+from modules.response_generator import ResponseGenerator
 
 # 環境変数の読み込み
 load_dotenv()
-
-NUM_TOP_DOCS = 10
-
 
 def main() -> None:
     parser = ArgumentParser()
@@ -41,68 +38,8 @@ def main() -> None:
     # 質問データの読み込み
     question_df = pd.read_csv("./share/質問回答/questions_test.csv", encoding="utf-8")
 
-    # モデルのセットアップ
-    ## Ollama-Cloudを使用
-    generate_mode = os.getenv("GENERATE_MODE", "ollama")
-    if generate_mode == "ollama":
-        llm = ChatOllama(
-            model=os.getenv("OLLAMA_MODEL_NAME", "gpt-oss:120b"),
-            base_url="https://ollama.com",
-            api_key=os.getenv("OLLAMA_API_KEY", None),
-            temperature=0.0,
-        )
-        ## ローカルLLMを使用
-        # llm = ChatOllama(
-        #     model=os.getenv("OLLAMA_MODEL_NAME", "gpt-oss:120b"),
-        #     temperature=0.0,
-        # )
-    elif generate_mode == "gemini":
-        llm = ChatGoogleGenerativeAI(
-            model=os.getenv("GEMINI_MODEL_NAME", "models/gemini-3.1-flash-lite"),
-            temperature=0.0,
-            thinking_budget=2048,
-        )
-
-    # Embeddingモデルの読み込み
-    embedding_mode = os.getenv("EMBEDDING_MODE", "huggingface")
-    if embedding_mode == "huggingface":
-        embedding = HuggingFaceEmbeddings(
-            model_name=os.getenv("EMBEDDING_MODEL_NAME", None),
-            model_kwargs={"device": "cuda", "trust_remote_code": True},
-        )
-    elif embedding_mode == "ollama":
-        embedding = OllamaEmbeddings(model=os.getenv("EMBEDDING_MODEL_NAME", None))
-    else:
-        raise ValueError(f"Invalid EMBEDDING_MODE: {embedding_mode}")
-
-    # ベクトルDBの読み込み
-    vectorstore_all = Chroma(
-        embedding_function=embedding,
-        persist_directory=persist_directory,
-        collection_name="shared_folder_all_documents",
-    )
-    vectorstore_csv = Chroma(
-        embedding_function=embedding,
-        persist_directory=persist_directory,
-        collection_name="shared_folder_csv_documents",
-    )
-    vectorstore_excel = Chroma(
-        embedding_function=embedding,
-        persist_directory=persist_directory,
-        collection_name="shared_folder_excel_documents",
-    )
-    vectorstore_file_info = Chroma(
-        embedding_function=embedding,
-        persist_directory=persist_directory,
-        collection_name="shared_folder_file_info_list",
-    )
-    # BM25Retrieverの読み込み
-    bm25 = BM25DocumentSearch(dir_path=persist_directory, k=30)
-    # Rerankerモデルの読み込み
-    reranker = CrossEncoder(
-        os.getenv("RERANKER_MODEL_NAME", None),
-        device="cuda",
-    )
+    # ResponseGeneratorのインスタンス化
+    response_generator = ResponseGenerator(persist_directory)
 
     # 途中再開か新規作成かで分岐
     if args.resume:
@@ -110,9 +47,6 @@ def main() -> None:
         answers = answer_df.to_dict(orient="list")
     else:
         answers = {"index": [], "question": [], "answer": [], "reason": [], "search_files": [], "doc_files": []}
-
-    # 画像データのキャッシュの読み込み
-    image_store = joblib.load(persist_directory / "image_store.joblib")
 
     # 質問に対する回答の生成
     for idx, row in question_df.iterrows():
@@ -123,130 +57,13 @@ def main() -> None:
         if row["index"] in answers["index"]:
             print("  回答済みのためスキップ")
             continue
-
-        # ファイル情報のベクトルDBから検索対象ファイルを取得
-        file_info_docs = vectorstore_file_info.similarity_search(query=input_question, k=10)
-        # 検索結果からファイルパスを拡張子ごとに取得
-        files, csv_files, excel_files = [], [], []
-        for doc in file_info_docs:
-            source = doc.metadata["source"]
-            ext = Path(source).suffix
-            if ext == ".csv":
-                csv_files.append(source)
-            elif ext == ".xlsx":
-                excel_files.append(source)
-            files.extend(
-                [str(p) for p in Path(source).parent.iterdir() if p.suffix not in [".csv", ".xlsx"]]
-            )
-
-        # ベクトルDBから検索
-        docs = []
-        if len(files) > 0:
-            files = list(set(files))
-            docs += vectorstore_all.max_marginal_relevance_search(
-                query=input_question,
-                k=30,
-                fetch_k=100,
-                lambda_mult=0.5,
-                filter={"source": {"$in": files}},
-            )
-        if len(csv_files) > 0:
-            docs += vectorstore_csv.max_marginal_relevance_search(
-                query=input_question,
-                k=30,
-                fetch_k=100,
-                lambda_mult=0.5,
-                filter={"source": {"$in": csv_files}},
-            )
-        if len(excel_files) > 0:
-            docs += vectorstore_excel.max_marginal_relevance_search(
-                query=input_question,
-                k=30,
-                fetch_k=100,
-                lambda_mult=0.5,
-                filter={"source": {"$in": excel_files}},
-            )
         
-        if len(docs) == 0:
-            docs = vectorstore_all.max_marginal_relevance_search(
-                query=input_question,
-                k=100,
-                fetch_k=200,
-                lambda_mult=0.5,
-            )
-        # BM25Retrieverから検索
-        docs += bm25(input_question)
+        # 検索の実行
+        search_files = response_generator.search_context(input_question)
 
-        # page_contentが重複するドキュメントを削除
-        seen_contents = set()
-        unique_docs = []
-        for doc in docs:
-            content = doc.page_content
-            if content not in seen_contents:
-                seen_contents.add(content)
-                unique_docs.append(doc)
-        docs = unique_docs
+        # 回答の生成
+        response_dict, doc_files = response_generator.genrate_answer(input_question)
 
-        # 検索した類似文書をリランキング
-        question_answer_list = [
-            (input_question, f"{doc.page_content}") for doc in docs
-        ]
-        scores = reranker.predict(question_answer_list)
-        reranked_docs = sorted(zip(docs, scores), key=lambda x: x[1], reverse=True)
-        top_docs = [doc for doc, _ in reranked_docs][:NUM_TOP_DOCS]
-
-        # RAGプロンプトに埋め込むために成形
-        contexts = []
-        for i, doc in enumerate(top_docs):
-            # テキストの追加
-            contexts.append({"type": "text", "text": f"ContextNo.{i + 1}:\n{doc.page_content}"})
-            # 画像を含む場合は画像も追加
-            if doc.metadata.get("image_store_id"):
-                image_store_ids = [doc.metadata["image_store_id"]]
-            elif doc.metadata.get("image_store_ids"):
-                image_store_ids = doc.metadata["image_store_ids"]
-            else:
-                image_store_ids = []
-            for image_store_id in image_store_ids:
-                contexts.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{image_store[image_store_id]}"
-                        },
-                    }
-                )
-
-        # 入力内容を作成
-        input_messages = [
-            SystemMessage(content=RAG_PROMPT_TEMPLATE),
-            HumanMessage(
-                content=contexts
-                + [
-                    {
-                        "type": "text",
-                        "text": f"## 質問\n{input_question}",
-                    }
-                ]
-            ),
-        ]
-
-        # 返答の生成
-        response = llm.invoke(input_messages)
-
-        if generate_mode == "gemini":
-            response_text = response.content[0]["text"]
-        else:
-            response_text = response.content
-
-        # 返答の変換
-        try:
-            response_dict = json.loads(response_text)
-        except Exception as e:
-            response_dict = {
-                "answer": response_text.replace("\n", ""),
-                "reason": f"jsonのパース失敗({e})",
-            }
         print(f"回答: {response_dict}")
 
         # 生成された返答内容を格納
@@ -254,8 +71,8 @@ def main() -> None:
         answers["question"].append(input_question)
         answers["answer"].append(response_dict["answer"].replace("\n", ""))
         answers["reason"].append(response_dict["reason"].replace("\n", ""))
-        answers["search_files"].append(",".join(files + csv_files + excel_files))
-        answers["doc_files"].append(",".join([doc.metadata["source"] for doc in top_docs]))
+        answers["search_files"].append(",".join(search_files))
+        answers["doc_files"].append(",".join(doc_files))
 
         generate_time = time.perf_counter() - start_time
         print(f"返答の生成時間: {generate_time:.2f}s")
