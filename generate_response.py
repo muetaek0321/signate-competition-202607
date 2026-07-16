@@ -7,11 +7,12 @@ from pathlib import Path
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ["HF_HOME"] = "./resource/pretrained"  # 事前学習モデルの保存先指定
 
+import joblib
 import pandas as pd
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
 from langchain_ollama.embeddings import OllamaEmbeddings
@@ -22,6 +23,8 @@ from modules.rag_prompt import RAG_PROMPT_TEMPLATE
 
 # 環境変数の読み込み
 load_dotenv()
+
+NUM_TOP_DOCS = 10
 
 
 def main() -> None:
@@ -57,7 +60,7 @@ def main() -> None:
         llm = ChatGoogleGenerativeAI(
             model=os.getenv("GEMINI_MODEL_NAME", "models/gemini-3.1-flash-lite"),
             temperature=0.0,
-            thinking_budget=4096,
+            thinking_budget=2048,
         )
 
     # Embeddingモデルの読み込み
@@ -106,7 +109,10 @@ def main() -> None:
         answer_df = pd.read_csv(output_path / "result_generated.csv", encoding="utf-8-sig")
         answers = answer_df.to_dict(orient="list")
     else:
-        answers = {"index": [], "question": [], "answer": [], "reason": [], "files": []}
+        answers = {"index": [], "question": [], "answer": [], "reason": [], "search_files": [], "doc_files": []}
+
+    # 画像データのキャッシュの読み込み
+    image_store = joblib.load(persist_directory / "image_store.joblib")
 
     # 質問に対する回答の生成
     for idx, row in question_df.iterrows():
@@ -119,7 +125,7 @@ def main() -> None:
             continue
 
         # ファイル情報のベクトルDBから検索対象ファイルを取得
-        file_info_docs = vectorstore_file_info.similarity_search(query=input_question, k=5)
+        file_info_docs = vectorstore_file_info.similarity_search(query=input_question, k=10)
         # 検索結果からファイルパスを拡張子ごとに取得
         files, csv_files, excel_files = [], [], []
         for doc in file_info_docs:
@@ -129,20 +135,17 @@ def main() -> None:
                 csv_files.append(source)
             elif ext == ".xlsx":
                 excel_files.append(source)
-            else:
-                files.append(source)
+            files.extend(
+                [str(p) for p in Path(source).parent.iterdir() if p.suffix not in [".csv", ".xlsx"]]
+            )
 
         # ベクトルDBから検索
-        docs = vectorstore_all.max_marginal_relevance_search(
-            query=input_question,
-            k=50,
-            fetch_k=100,
-            lambda_mult=0.5,
-        )
+        docs = []
         if len(files) > 0:
+            files = list(set(files))
             docs += vectorstore_all.max_marginal_relevance_search(
                 query=input_question,
-                k=20,
+                k=30,
                 fetch_k=100,
                 lambda_mult=0.5,
                 filter={"source": {"$in": files}},
@@ -150,20 +153,27 @@ def main() -> None:
         if len(csv_files) > 0:
             docs += vectorstore_csv.max_marginal_relevance_search(
                 query=input_question,
-                k=20,
-                fetch_k=50,
+                k=30,
+                fetch_k=100,
                 lambda_mult=0.5,
                 filter={"source": {"$in": csv_files}},
             )
         if len(excel_files) > 0:
             docs += vectorstore_excel.max_marginal_relevance_search(
                 query=input_question,
-                k=20,
-                fetch_k=50,
+                k=30,
+                fetch_k=100,
                 lambda_mult=0.5,
                 filter={"source": {"$in": excel_files}},
             )
-
+        
+        if len(docs) == 0:
+            docs = vectorstore_all.max_marginal_relevance_search(
+                query=input_question,
+                k=100,
+                fetch_k=200,
+                lambda_mult=0.5,
+            )
         # BM25Retrieverから検索
         docs += bm25(input_question)
 
@@ -179,21 +189,46 @@ def main() -> None:
 
         # 検索した類似文書をリランキング
         question_answer_list = [
-            (input_question, f"{doc.metadata}\n{doc.page_content}") for doc in docs
+            (input_question, f"{doc.page_content}") for doc in docs
         ]
         scores = reranker.predict(question_answer_list)
         reranked_docs = sorted(zip(docs, scores), key=lambda x: x[1], reverse=True)
-        top_docs = [doc for doc, _ in reranked_docs][:10]
+        top_docs = [doc for doc, _ in reranked_docs][:NUM_TOP_DOCS]
 
         # RAGプロンプトに埋め込むために成形
-        context = "\n".join(
-            [f"ContextNo.{i + 1}:\n{doc.page_content}" for i, doc in enumerate(top_docs)]
-        )
+        contexts = []
+        for i, doc in enumerate(top_docs):
+            # テキストの追加
+            contexts.append({"type": "text", "text": f"ContextNo.{i + 1}:\n{doc.page_content}"})
+            # 画像を含む場合は画像も追加
+            if doc.metadata.get("image_store_id"):
+                image_store_ids = [doc.metadata["image_store_id"]]
+            elif doc.metadata.get("image_store_ids"):
+                image_store_ids = doc.metadata["image_store_ids"]
+            else:
+                image_store_ids = []
+            for image_store_id in image_store_ids:
+                contexts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/png;base64,{image_store[image_store_id]}"
+                        },
+                    }
+                )
+
         # 入力内容を作成
         input_messages = [
+            SystemMessage(content=RAG_PROMPT_TEMPLATE),
             HumanMessage(
-                content=RAG_PROMPT_TEMPLATE.format(question=input_question, context=context)
-            )
+                content=contexts
+                + [
+                    {
+                        "type": "text",
+                        "text": f"## 質問\n{input_question}",
+                    }
+                ]
+            ),
         ]
 
         # 返答の生成
@@ -209,7 +244,7 @@ def main() -> None:
             response_dict = json.loads(response_text)
         except Exception as e:
             response_dict = {
-                "answer": response.content.replace("\n", ""),
+                "answer": response_text.replace("\n", ""),
                 "reason": f"jsonのパース失敗({e})",
             }
         print(f"回答: {response_dict}")
@@ -218,8 +253,9 @@ def main() -> None:
         answers["index"].append(row["index"])
         answers["question"].append(input_question)
         answers["answer"].append(response_dict["answer"].replace("\n", ""))
-        answers["reason"].append(response_dict["reason"])
-        answers["files"].append(",".join([doc.metadata["source"] for doc in top_docs]))
+        answers["reason"].append(response_dict["reason"].replace("\n", ""))
+        answers["search_files"].append(",".join(files + csv_files + excel_files))
+        answers["doc_files"].append(",".join([doc.metadata["source"] for doc in top_docs]))
 
         generate_time = time.perf_counter() - start_time
         print(f"返答の生成時間: {generate_time:.2f}s")
