@@ -1,4 +1,3 @@
-import json
 import os
 import time
 from argparse import ArgumentParser
@@ -7,22 +6,14 @@ from pathlib import Path
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ["HF_HOME"] = "./resource/pretrained"  # 事前学習モデルの保存先指定
 
-import joblib
 import pandas as pd
 from dotenv import load_dotenv
-from langchain_chroma import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_ollama import ChatOllama
-from langchain_ollama.embeddings import OllamaEmbeddings
-from sentence_transformers import CrossEncoder
 
-from modules.bm25_search import BM25DocumentSearch
 from modules.response_generator import ResponseGenerator
 
 # 環境変数の読み込み
 load_dotenv()
+
 
 def main() -> None:
     parser = ArgumentParser()
@@ -46,7 +37,14 @@ def main() -> None:
         answer_df = pd.read_csv(output_path / "result_generated.csv", encoding="utf-8-sig")
         answers = answer_df.to_dict(orient="list")
     else:
-        answers = {"index": [], "question": [], "answer": [], "reason": [], "search_files": [], "doc_files": []}
+        answers = {
+            "index": [],
+            "question": [],
+            "answer": [],
+            "reason": [],
+            "search_files": [],
+            "doc_files": [],
+        }
 
     # 質問に対する回答の生成
     for idx, row in question_df.iterrows():
@@ -57,7 +55,7 @@ def main() -> None:
         if row["index"] in answers["index"]:
             print("  回答済みのためスキップ")
             continue
-        
+
         # 検索の実行
         search_files = response_generator.search_context(input_question)
 
