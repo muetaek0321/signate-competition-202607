@@ -24,6 +24,7 @@ from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_ollama.embeddings import OllamaEmbeddings
 from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
 
+from modules.check_office_password import is_password_protected, is_pdf_password_protected
 from modules.custom_document_loader import csv_loader
 from modules.custom_loader import (
     ExcelStyleLoader,
@@ -130,6 +131,9 @@ def main() -> None:
             print("  既に読み込み済みのためスキップ")
             continue
 
+        # パスワードロックされているか
+        is_encrypted = False
+
         try:
             if ext == ".csv":
                 docs = csv_loader(path)
@@ -144,9 +148,11 @@ def main() -> None:
                             batch_docs, ids=batch_ids
                         )
             elif ext == ".xlsx":
-                docs = UnstructuredExcelLoader(path).load()
-                docs += ExcelStyleLoader(path).load()
-                docs = text_splitter.split_documents(docs)
+                is_encrypted, docs = is_password_protected(path)
+                if not is_encrypted:
+                    docs = UnstructuredExcelLoader(path).load()
+                    docs += ExcelStyleLoader(path).load()
+                    docs = text_splitter.split_documents(docs)
                 docs, ids = docs_ids(docs, path)
                 all_docs.extend(docs)
                 if docs:
@@ -169,17 +175,21 @@ def main() -> None:
                             batch_docs, ids=batch_ids
                         )
             elif ext == ".docx":
-                docs = UnstructuredWordDocumentLoader(path).load()
-                docs += WordDocumentStyleLoader(path).load()
-                docs = text_splitter.split_documents(docs)
+                is_encrypted, docs = is_password_protected(path)
+                if not is_encrypted:
+                    docs = UnstructuredWordDocumentLoader(path).load()
+                    docs += WordDocumentStyleLoader(path).load()
+                    docs = text_splitter.split_documents(docs)
                 docs, ids = docs_ids(docs, path)
                 all_docs.extend(docs)
                 if docs:
                     vectorstores["shared_folder_all_documents"].add_documents(docs, ids=ids)
             elif ext == ".pptx":
-                docs = UnstructuredPowerPointLoader(path).load()
-                docs += PowerPointStyleLoader(path).load()
-                docs = text_splitter.split_documents(docs)
+                is_encrypted, docs = is_password_protected(path)
+                if not is_encrypted:
+                    docs = UnstructuredPowerPointLoader(path).load()
+                    docs += PowerPointStyleLoader(path).load()
+                    docs = text_splitter.split_documents(docs)
                 docs, ids = docs_ids(docs, path)
                 all_docs.extend(docs)
                 if docs:
@@ -199,8 +209,10 @@ def main() -> None:
                 if docs:
                     vectorstores["shared_folder_all_documents"].add_documents(docs, ids=ids)
             elif ext == ".pdf":
-                docs = PyPDFLoader(path).load()
-                docs = text_splitter.split_documents(docs)
+                is_encrypted, docs = is_pdf_password_protected(path)
+                if not is_encrypted:
+                    docs = PyPDFLoader(path).load()
+                    docs = text_splitter.split_documents(docs)
                 docs, ids = docs_ids(docs, path)
                 all_docs.extend(docs)
                 if docs:
@@ -250,19 +262,28 @@ def main() -> None:
         path_parts = path.parts
         if path_parts[2] == "プロジェクト":
             file_info_str = FILE_INFO_FORMAT_PROJECT.format(
+                filepath=str(path),
                 filename=path.name,
+                extension=path.suffix,
                 directory_type=path_parts[2],
                 company_name=path_parts[3],
                 category=path_parts[4],
             )
         else:
             file_info_str = FILE_INFO_FORMAT_INTERNAL.format(
+                filepath=str(path),
                 filename=path.name,
+                extension=path.suffix,
                 directory_type=path_parts[2],
             )
         file_info_doc = Document(
             page_content=file_info_str,
-            metadata={"source": str(path), "directory": str(path.parent)},
+            metadata={
+                "source": str(path),
+                "directory": str(path.parent),
+                "extension": path.suffix,
+                "is_encrypted": is_encrypted,
+            },
         )
         vectorstores["shared_folder_file_info_list"].add_documents([file_info_doc], ids=[str(path)])
 
