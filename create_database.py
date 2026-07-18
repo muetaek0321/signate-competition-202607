@@ -28,7 +28,9 @@ from modules.custom_document_loader import csv_loader
 from modules.custom_loader import (
     ExcelStyleLoader,
     ImageDocumentLoader,
+    MarkdownLoader,
     NotebookCellLoader,
+    PowerPointStyleLoader,
     WordDocumentStyleLoader,
 )
 from modules.file_info_format import FILE_INFO_FORMAT_INTERNAL, FILE_INFO_FORMAT_PROJECT
@@ -130,7 +132,6 @@ def main() -> None:
 
         try:
             if ext == ".csv":
-                continue
                 docs = csv_loader(path)
                 docs = text_splitter.split_documents(docs)
                 docs, ids = docs_ids(docs, path)
@@ -177,6 +178,7 @@ def main() -> None:
                     vectorstores["shared_folder_all_documents"].add_documents(docs, ids=ids)
             elif ext == ".pptx":
                 docs = UnstructuredPowerPointLoader(path).load()
+                docs += PowerPointStyleLoader(path).load()
                 docs = text_splitter.split_documents(docs)
                 docs, ids = docs_ids(docs, path)
                 all_docs.extend(docs)
@@ -203,13 +205,20 @@ def main() -> None:
                 all_docs.extend(docs)
                 if docs:
                     vectorstores["shared_folder_all_documents"].add_documents(docs, ids=ids)
+            elif ext == ".md":
+                docs = MarkdownLoader(path).load()
+                docs = text_splitter.split_documents(docs)
+                docs, ids = docs_ids(docs, path)
+                all_docs.extend(docs)
+                if docs:
+                    vectorstores["shared_folder_all_documents"].add_documents(docs, ids=ids)
             elif ext in [".png", ".jpg", "jpeg", ".bmp", ".tiff"]:
                 docs = ImageDocumentLoader(path).load()
                 docs, ids = docs_ids(docs, path)
                 all_docs.extend(docs)
                 if docs:
                     vectorstores["shared_folder_all_documents"].add_documents(docs, ids=ids)
-            elif ext in [".json", ".txt", ".md", ".toml"]:
+            elif ext in [".json", ".txt", ".toml"]:
                 docs = TextLoader(path, encoding="utf-8").load()
                 docs = text_splitter.split_documents(docs)
                 docs, ids = docs_ids(docs, path)

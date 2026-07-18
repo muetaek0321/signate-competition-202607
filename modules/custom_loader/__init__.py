@@ -1,4 +1,6 @@
 from .excel_style_loader import ExcelStyleLoader
 from .image_file_loader import ImageDocumentLoader
+from .markdown_loader import MarkdownLoader
 from .msword_style_loader import WordDocumentStyleLoader
 from .notebook_cell_loader import NotebookCellLoader
+from .powerpoint_style_loader import PowerPointStyleLoader
