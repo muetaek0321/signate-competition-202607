@@ -61,8 +61,12 @@ def main() -> None:
 
         # 回答の生成
         response_dict, doc_files = response_generator.genrate_answer(input_question)
-
         print(f"回答: {response_dict}")
+
+        # 回答できなかった場合にリトライ
+        if "わかりません" in response_dict["answer"]:
+            response_dict, doc_files = response_generator.genrate_answer(input_question, retry=1)
+            print(f"回答(retry): {response_dict}")
 
         # 生成された返答内容を格納
         answers["index"].append(row["index"])

@@ -7,7 +7,7 @@ os.environ["HF_HOME"] = "./resource/pretrained"  # 事前学習モデルの保�
 import joblib
 from langchain_chroma import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
 from langchain_ollama.embeddings import OllamaEmbeddings
@@ -17,6 +17,11 @@ from sentence_transformers import CrossEncoder
 from modules.bm25_search import BM25DocumentSearch
 from modules.generate_query import QueryGenerator
 from modules.rag_prompt import RAG_PROMPT_TEMPLATE
+
+AI_RESPONSE_FORMAT = """
+回答: {answer}
+根拠: {reason}
+"""
 
 
 class Response(BaseModel):
@@ -28,6 +33,7 @@ class Response(BaseModel):
 class ResponseGenerator:
     def __init__(self, persist_directory):
         self.num_top_docs = 15
+        self.input_messages = []
 
         # モデルのセットアップ
         ## Ollama-Cloudを使用
@@ -104,7 +110,8 @@ class ResponseGenerator:
         query = self.query_gen(input_question)
 
         # ファイル情報のベクトルDBから検索対象ファイルを取得
-        file_info_docs = self.vectorstore_file_info.similarity_search(query=query, k=10)
+        file_info_docs = self.vectorstore_file_info.similarity_search(query=query, k=5)
+
         # 検索結果からファイルパスを拡張子ごとに取得
         files, csv_files, excel_files = [], [], []
         for doc in file_info_docs:
@@ -174,14 +181,26 @@ class ResponseGenerator:
         search_files = files + csv_files + excel_files
         return search_files
 
-    def genrate_answer(self, input_question: str) -> tuple[dict[str, str], list[str]]:
-        top_docs = [doc for doc, _ in self.reranked_docs][: self.num_top_docs]
+    def genrate_answer(
+        self, input_question: str, retry: int = 0
+    ) -> tuple[dict[str, str], list[str]]:
+        # 初回実行時にシステムプロンプトのみに初期化
+        if retry == 0:
+            self.input_messages = [SystemMessage(content=RAG_PROMPT_TEMPLATE)]
+
+        # リトライ回数に応じてドキュメントを取得
+        top_docs = [doc for doc, _ in self.reranked_docs][
+            self.num_top_docs * retry : self.num_top_docs * (retry + 1)
+        ]
 
         # RAGプロンプトに埋め込むために成形
         contexts = []
         for i, doc in enumerate(top_docs):
             # テキストの追加
-            contexts.append({"type": "text", "text": f"ContextNo.{i + 1}:\n{doc.page_content}"})
+            context_num = self.num_top_docs * retry + i + 1
+            contexts.append(
+                {"type": "text", "text": f"ContextNo.{context_num}:\n{doc.page_content}"}
+            )
             # 画像を含む場合は画像も追加
             if doc.metadata.get("image_store_id"):
                 image_store_ids = [doc.metadata["image_store_id"]]
@@ -198,39 +217,28 @@ class ResponseGenerator:
                         },
                     }
                 )
+        # 最後に質問文を追加
+        contexts.append({"type": "text", "text": f"## 質問\n{input_question}"})
 
         # 入力内容を作成
-        input_messages = [
-            SystemMessage(content=RAG_PROMPT_TEMPLATE),
-            HumanMessage(
-                content=contexts
-                + [
-                    {
-                        "type": "text",
-                        "text": f"## 質問\n{input_question}",
-                    }
-                ]
-            ),
-        ]
+        self.input_messages.append(HumanMessage(content=contexts))
 
         # 返答の生成
-        response = self.llm.invoke(input_messages)
-
-        # if self.generate_mode == "gemini":
-        #     response_text = response.content[0]["text"]
-        # else:
-        #     response_text = response.content
-
-        # # 返答の変換
-        # try:
-        #     response_dict = json.loads(response_text)
-        # except Exception as e:
-        #     response_dict = {
-        #         "answer": response_text.replace("\n", ""),
-        #         "reason": f"jsonのパース失敗({e})",
-        #     }
+        response = self.llm.invoke(self.input_messages)
         response_dict = response.model_dump()
 
-        doc_files = list(set([doc.metadata["source"] for doc in top_docs]))
+        # リトライ時のために今回のAIの返答を履歴に追加（Gemini等のAPIエラー回避）
+        self.input_messages.append(
+            AIMessage(
+                content=AI_RESPONSE_FORMAT.format(answer=response.answer, reason=response.reason)
+            )
+        )
+
+        doc_files = list(
+            {
+                doc.metadata["source"]
+                for doc, _ in self.reranked_docs[: self.num_top_docs * (retry + 1)]
+            }
+        )
 
         return response_dict, doc_files
