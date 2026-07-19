@@ -25,9 +25,8 @@ AI_RESPONSE_FORMAT = """
 
 
 class Response(BaseModel):
-    reason: str = Field(description="回答を導き出すための思考プロセスや、コンテキスト中の根拠")
-    answer: str = Field(description="質問に対する直接的な回答")
-    search_queries: list[str] = Field(description="再検索用の検索クエリのリスト")
+    reason: str = Field(description="回答を導き出すための思考プロセスやコンテキスト中の根拠")
+    answer: str = Field(description="質問に対するシンプルかつ直接的な回答（情報不足の場合は「わかりません」と回答）")
 
 
 class ResponseGenerator:
