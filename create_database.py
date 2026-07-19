@@ -23,7 +23,6 @@ from langchain_ollama.embeddings import OllamaEmbeddings
 from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
 
 from modules.check_office_password import is_password_protected, is_pdf_password_protected
-from modules.custom_document_loader import csv_loader
 from modules.custom_loader import (
     ExcelChunkLoader,
     ExcelStyleLoader,
@@ -33,6 +32,7 @@ from modules.custom_loader import (
     PDFDocumentImageLoader,
     PowerPointStyleLoader,
     WordDocumentStyleLoader,
+    CsvChunkLoader
 )
 from modules.file_info_format import FILE_INFO_FORMAT_INTERNAL, FILE_INFO_FORMAT_PROJECT
 
@@ -136,7 +136,7 @@ def main() -> None:
 
         try:
             if ext == ".csv":
-                docs = csv_loader(path)
+                docs = CsvChunkLoader(path).load()
                 docs = text_splitter.split_documents(docs)
                 docs, ids = docs_ids(docs, path)
                 all_docs.extend(docs)
@@ -163,7 +163,7 @@ def main() -> None:
                             batch_docs, ids=batch_ids
                         )
             elif ext == ".tsv":
-                docs = CSVLoader(path, csv_args={"delimiter": "\t"}).load()
+                docs = CsvChunkLoader(path, delimiter="\t").load()
                 docs = text_splitter.split_documents(docs)
                 docs, ids = docs_ids(docs, path)
                 all_docs.extend(docs)

@@ -6,3 +6,4 @@ from .msword_style_loader import WordDocumentStyleLoader
 from .notebook_cell_loader import NotebookCellLoader
 from .pdf_document_image_loader import PDFDocumentImageLoader
 from .powerpoint_style_loader import PowerPointStyleLoader
+from .csv_chunk_loader import CsvChunkLoader
