@@ -32,6 +32,7 @@ class ExcelStyleLoader(BaseLoader):
     ・ハイパーリンク
     ・結合セル
     ・画像
+    ・グラフ（種類, タイトル, 軸, 系列情報）
     """
 
     def __init__(self, file_path: str | Path):
@@ -124,6 +125,17 @@ class ExcelStyleLoader(BaseLoader):
             sheet_parts.append({"type": "image", "data": image_descriptions})
 
             ###########################################################
+            # グラフ
+            ###########################################################
+
+            chart_descriptions = []
+            for chart_index, chart in enumerate(ws._charts):
+                chart_info = self._extract_chart_info(chart, chart_index)
+                chart_descriptions.append(chart_info)
+
+            sheet_parts.append({"type": "chart", "data": chart_descriptions})
+
+            ###########################################################
             # metadata
             ###########################################################
 
@@ -137,6 +149,7 @@ class ExcelStyleLoader(BaseLoader):
                 "image_count": len(image_idxes),
                 "image_idxes": image_idxes if len(image_idxes) > 0 else None,
                 "image_store_ids": image_store_ids if len(image_store_ids) > 0 else None,
+                "chart_count": len(chart_descriptions),
             }
 
             style_docs.append(
@@ -216,6 +229,101 @@ class ExcelStyleLoader(BaseLoader):
                     texts.append(f"Index {desc['image_index']}")
                     texts.append(desc["description"])
 
+            elif part["type"] == "chart":
+                for chart_desc in part["data"]:
+                    texts.append(f"[CHART:{chart_desc['chart_type']}]")
+
+                    if chart_desc["title"]:
+                        texts.append(f"Title={chart_desc['title']}")
+
+                    if chart_desc["x_axis_title"]:
+                        texts.append(f"X_Axis={chart_desc['x_axis_title']}")
+
+                    if chart_desc["y_axis_title"]:
+                        texts.append(f"Y_Axis={chart_desc['y_axis_title']}")
+
+                    if chart_desc["style"] is not None:
+                        texts.append(f"Style={chart_desc['style']}")
+
+                    for s in chart_desc["series"]:
+                        texts.append(f"  Series[{s['index']}]")
+
+                        if s.get("title"):
+                            texts.append(f"    Name={s['title']}")
+
+                        if s.get("values_ref"):
+                            texts.append(f"    Values={s['values_ref']}")
+
+                        if s.get("categories_ref"):
+                            texts.append(f"    Categories={s['categories_ref']}")
+
             texts.append("")
 
         return "\n".join(texts)
+
+    def _extract_chart_info(self, chart, chart_index: int) -> dict:
+        """グラフオブジェクトから情報を抽出する"""
+
+        chart_type = type(chart).__name__
+
+        # タイトル
+        title = None
+        if chart.title is not None:
+            title = str(chart.title)
+
+        # 軸タイトル
+        x_axis_title = None
+        y_axis_title = None
+        if hasattr(chart, "x_axis") and chart.x_axis is not None:
+            if chart.x_axis.title is not None:
+                x_axis_title = str(chart.x_axis.title)
+        if hasattr(chart, "y_axis") and chart.y_axis is not None:
+            if chart.y_axis.title is not None:
+                y_axis_title = str(chart.y_axis.title)
+
+        # 系列情報
+        series_list = []
+        for s_idx, series in enumerate(chart.series):
+            series_info = {
+                "index": s_idx,
+                "title": str(series.title) if series.title else None,
+            }
+
+            # データ参照範囲
+            if hasattr(series, "val") and series.val is not None:
+                num_ref = getattr(series.val, "numRef", None)
+                if num_ref is not None and hasattr(num_ref, "f"):
+                    series_info["values_ref"] = str(num_ref.f)
+
+            # カテゴリ参照範囲
+            if hasattr(series, "cat") and series.cat is not None:
+                cat_ref = (
+                    getattr(series.cat, "strRef", None)
+                    or getattr(series.cat, "numRef", None)
+                )
+                if cat_ref is not None and hasattr(cat_ref, "f"):
+                    series_info["categories_ref"] = str(cat_ref.f)
+
+            series_list.append(series_info)
+
+        # スタイル
+        style = getattr(chart, "style", None)
+
+        return {
+            "chart_index": chart_index,
+            "chart_type": chart_type,
+            "title": title,
+            "x_axis_title": x_axis_title,
+            "y_axis_title": y_axis_title,
+            "series": series_list,
+            "style": style,
+        }
+
+
+if __name__ == "__main__":
+    path = r"..\..\share\共有ドライブ\プロジェクト\株式会社青潮モビリティサービス\03.データ\train.xlsx"
+    loader = ExcelStyleLoader(path)
+    docs = loader.load()
+    print(docs[0].metadata)
+    print(docs[0].page_content)
+    
