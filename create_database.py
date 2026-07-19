@@ -12,10 +12,8 @@ from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import (
     CSVLoader,
-    PyPDFLoader,
     PythonLoader,
     TextLoader,
-    UnstructuredExcelLoader,
     UnstructuredPowerPointLoader,
     UnstructuredWordDocumentLoader,
 )
@@ -27,10 +25,12 @@ from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
 from modules.check_office_password import is_password_protected, is_pdf_password_protected
 from modules.custom_document_loader import csv_loader
 from modules.custom_loader import (
+    ExcelChunkLoader,
     ExcelStyleLoader,
     ImageDocumentLoader,
     MarkdownLoader,
     NotebookCellLoader,
+    PDFDocumentImageLoader,
     PowerPointStyleLoader,
     WordDocumentStyleLoader,
 )
@@ -150,7 +150,7 @@ def main() -> None:
             elif ext == ".xlsx":
                 is_encrypted, docs = is_password_protected(path)
                 if not is_encrypted:
-                    docs = UnstructuredExcelLoader(path).load()
+                    docs = ExcelChunkLoader(path).load()
                     docs += ExcelStyleLoader(path).load()
                     docs = text_splitter.split_documents(docs)
                 docs, ids = docs_ids(docs, path)
@@ -211,7 +211,7 @@ def main() -> None:
             elif ext == ".pdf":
                 is_encrypted, docs = is_pdf_password_protected(path)
                 if not is_encrypted:
-                    docs = PyPDFLoader(path).load()
+                    docs = PDFDocumentImageLoader(path).load()
                     docs = text_splitter.split_documents(docs)
                 docs, ids = docs_ids(docs, path)
                 all_docs.extend(docs)
