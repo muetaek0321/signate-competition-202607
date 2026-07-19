@@ -6,10 +6,8 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 load_dotenv()
 
 PROMPT_TEMPLATE = """
-あなたはRAG（検索拡張生成）システムにおける高度なクエリ生成アシスタントです。
-ユーザーの質問から、ベクトルデータベースやハイブリッド検索に最適な検索クエリ（キーワード群）を生成してください。
-
-【指示】
+ユーザーは社内情報ファイルサーバに対する情報検索のための質問文を入力します。
+ユーザーの質問内容から、ベクトルデータベースやハイブリッド検索に最適な検索クエリ（キーワード群）を生成してください。
 以下のルールに従って、質問文から検索に必要な重要キーワードを抽出し、スペース区切りで出力してください。
 
 【ルール】
@@ -32,13 +30,6 @@ class QueryGenerator:
 
     def __init__(self) -> None:
         """初期化"""
-        # self.model_name = "gemma4:12b"
-        # self.model_name = "qwen3.5:9b"
-        # self.llm = ChatOllama(
-        #     model=self.model_name,
-        #     temperature=0.0,
-        # )
-
         self.llm = ChatGoogleGenerativeAI(model="models/gemma-4-31b-it", temperature=0.0)
 
     def __call__(self, input_question: str) -> str:

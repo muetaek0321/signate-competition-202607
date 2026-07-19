@@ -91,7 +91,7 @@ class ResponseGenerator:
             collection_name="shared_folder_file_info_list",
         )
         # BM25Retrieverの読み込み
-        self.bm25 = BM25DocumentSearch(dir_path=persist_directory, k=30)
+        self.bm25 = BM25DocumentSearch(dir_path=persist_directory, k=50)
         # Rerankerモデルの読み込み
         self.reranker = CrossEncoder(
             os.getenv("RERANKER_MODEL_NAME", None),
@@ -109,7 +109,12 @@ class ResponseGenerator:
         query = self.query_gen(input_question)
 
         # ファイル情報のベクトルDBから検索対象ファイルを取得
-        file_info_docs = self.vectorstore_file_info.similarity_search(query=query, k=5)
+        file_info_docs = self.vectorstore_file_info.similarity_search(query=query, k=10)
+        # 検索したファイル情報をリランキング
+        question_file_info_list = [(input_question, f"{doc.page_content}") for doc in file_info_docs]
+        scores = self.reranker.predict(question_file_info_list)
+        reranked_file_info_docs = sorted(zip(file_info_docs, scores), key=lambda x: x[1], reverse=True)
+        file_info_docs = [doc for doc, score in reranked_file_info_docs][:5]
 
         # 検索結果からファイルパスを拡張子ごとに取得
         files, csv_files, excel_files = [], [], []
@@ -130,8 +135,8 @@ class ResponseGenerator:
             files = list(set(files))
             docs += self.vectorstore_all.max_marginal_relevance_search(
                 query=query,
-                k=30,
-                fetch_k=100,
+                k=50,
+                fetch_k=150,
                 lambda_mult=0.5,
                 filter={"source": {"$in": files}},
             )
