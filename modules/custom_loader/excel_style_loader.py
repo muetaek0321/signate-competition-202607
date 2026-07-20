@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tempfile
 from io import BytesIO
 from pathlib import Path
 
@@ -8,7 +9,14 @@ from langchain_core.documents import Document
 from openpyxl import load_workbook
 from PIL import Image
 
+from modules.check_win32com import check_excel_com
+
 from .image_file_loader import ImageDocumentLoader
+
+# win32comでExcelが使用可能かチェック
+IS_WIN32COM = check_excel_com()
+if IS_WIN32COM:
+    import win32com.client
 
 
 class ExcelStyleLoader(BaseLoader):
@@ -37,6 +45,10 @@ class ExcelStyleLoader(BaseLoader):
 
     def __init__(self, file_path: str | Path):
         self.file_path = Path(file_path)
+        if IS_WIN32COM:
+            self.excel = win32com.client.Dispatch("Excel.Application")
+            self.excel.Visible = False
+            self.excel.DisplayAlerts = False
 
     def load(self) -> list[Document]:
 
@@ -45,9 +57,18 @@ class ExcelStyleLoader(BaseLoader):
             data_only=False,
         )
 
+        if IS_WIN32COM:
+            wb_com = self.excel.Workbooks.Open(
+                self.file_path.absolute(),
+            )
+
+        img_loader = ImageDocumentLoader(self.file_path)
+
         style_docs = []
         for ws in wb.worksheets:
             sheet_parts = []
+            image_parts = []
+            chart_parts = []
 
             ###########################################################
             # セル
@@ -105,35 +126,67 @@ class ExcelStyleLoader(BaseLoader):
             # 画像
             ###########################################################
 
-            image_idxes, image_store_ids = [], []
-            image_descriptions = []
-
             for index, img in enumerate(ws._images):
                 image_bytes = img._data()
 
                 image = Image.open(BytesIO(image_bytes))
 
-                response_date, image_store_id = ImageDocumentLoader(self.file_path)._describe_image(
-                    image
+                response_data, image_store_id = img_loader._describe_image(image)
+                description = response_data[1]["text"]
+
+                image_parts.append(
+                    {
+                        "image_index": index,
+                        "image_store_id": image_store_id,
+                        "description": description,
+                    }
                 )
-                description = response_date[1]["text"]
-
-                image_idxes.append(index)
-                image_store_ids.append(image_store_id)
-                image_descriptions.append({"image_index": index, "description": description})
-
-            sheet_parts.append({"type": "image", "data": image_descriptions})
 
             ###########################################################
             # グラフ
             ###########################################################
 
-            chart_descriptions = []
-            for chart_index, chart in enumerate(ws._charts):
-                chart_info = self._extract_chart_info(chart, chart_index)
-                chart_descriptions.append(chart_info)
+            if IS_WIN32COM:
+                # グラフを画像化して説明を追加
+                ws_com = wb_com.Worksheets(ws.title)
+                chart_objects = ws_com.ChartObjects()
 
-            sheet_parts.append({"type": "chart", "data": chart_descriptions})
+                if chart_objects.Count > 0:
+                    for index in range(1, chart_objects.Count + 1):
+                        chart_object = chart_objects.Item(index)
+
+                        with tempfile.NamedTemporaryFile(
+                            suffix=".png",
+                            delete=False,
+                        ) as tmp:
+                            png_path = tmp.name
+
+                            # PNGへ保存
+                            chart_object.Chart.Export(
+                                Filename=png_path,
+                                FilterName="PNG",
+                            )
+
+                            # PILへ読み込み
+                            with Image.open(png_path) as img:
+                                image = img.copy()
+
+                            # 画像保存
+                            response_data, image_store_id = img_loader._describe_image(image)
+                            description = response_data[1]["text"]
+
+                            chart_parts.append(
+                                {
+                                    "chart_index": index - 1,
+                                    "description": description,
+                                    "image_store_id": image_store_id,
+                                }
+                            )
+            else:
+                # グラフ情報を取得できるもののみ情報記録
+                for chart_index, chart in enumerate(ws._charts):
+                    chart_info = self._extract_chart_info(chart, chart_index)
+                    chart_parts.append({"chart_index": index, "chart_info": chart_info})
 
             ###########################################################
             # metadata
@@ -146,10 +199,6 @@ class ExcelStyleLoader(BaseLoader):
                 "max_row": ws.max_row,
                 "max_column": ws.max_column,
                 "merged_cells": merged_cells if len(merged_cells) > 0 else None,
-                "image_count": len(image_idxes),
-                "image_idxes": image_idxes if len(image_idxes) > 0 else None,
-                "image_store_ids": image_store_ids if len(image_store_ids) > 0 else None,
-                "chart_count": len(chart_descriptions),
             }
 
             style_docs.append(
@@ -163,6 +212,27 @@ class ExcelStyleLoader(BaseLoader):
                 )
             )
 
+            # 画像のデータを個別にDodument化して保存
+            for image_part in image_parts:
+                style_docs.append(
+                    Document(
+                        page_content=self._build_image_text(ws.title, image_part),
+                        metadata=metadata | {"image_store_id": image_part["image_store_id"]},
+                    )
+                )
+            # グラフのデータを個別にDodument化して保存
+            for chart_part in chart_parts:
+                if "image_store_id" in chart_part:
+                    chart_metadata = metadata | {"image_store_id": chart_part["image_store_id"]}
+                else:
+                    chart_metadata = metadata
+                style_docs.append(
+                    Document(
+                        page_content=self._build_chart_text(ws.title, chart_part),
+                        metadata=chart_metadata,
+                    )
+                )
+
         return style_docs
 
     ##################################################################
@@ -172,10 +242,8 @@ class ExcelStyleLoader(BaseLoader):
         sheet_name,
         sheet_parts,
         merged_cells,
-    ):
-
+    ) -> str:
         texts = []
-
         texts.append(f"# Sheet: {sheet_name}")
         texts.append("")
 
@@ -222,42 +290,67 @@ class ExcelStyleLoader(BaseLoader):
                 if cell["hyperlink"]:
                     texts.append(f"[LINK]{cell['hyperlink']}")
 
-            elif part["type"] == "image":
-                texts.append("[IMAGE]")
+                texts.append("")
 
-                for desc in part["data"]:
-                    texts.append(f"Index {desc['image_index']}")
-                    texts.append(desc["description"])
+        return "\n".join(texts)
 
-            elif part["type"] == "chart":
-                for chart_desc in part["data"]:
-                    texts.append(f"[CHART:{chart_desc['chart_type']}]")
+    def _build_image_text(
+        self,
+        sheet_name,
+        image_part,
+    ) -> str:
+        texts = []
+        texts.append(f"# Sheet: {sheet_name}")
+        texts.append("[IMAGE]")
+        texts.append(f"Index {image_part['image_index']}")
+        texts.append(image_part["description"])
+        texts.append("")
 
-                    if chart_desc["title"]:
-                        texts.append(f"Title={chart_desc['title']}")
+        return "\n".join(texts)
 
-                    if chart_desc["x_axis_title"]:
-                        texts.append(f"X_Axis={chart_desc['x_axis_title']}")
+    def _build_chart_text(
+        self,
+        sheet_name,
+        chart_part,
+    ) -> str:
+        texts = []
+        texts.append(f"# Sheet: {sheet_name}")
+        texts.append("[CHART]")
 
-                    if chart_desc["y_axis_title"]:
-                        texts.append(f"Y_Axis={chart_desc['y_axis_title']}")
+        if "chart_info" in chart_part.keys():
+            chart_desc = chart_part["chart_info"]
+            texts.append(f"Index {chart_desc['chart_index']}")
+            texts.append(f"[CHART:{chart_desc['chart_type']}]")
 
-                    if chart_desc["style"] is not None:
-                        texts.append(f"Style={chart_desc['style']}")
+            if chart_desc["title"]:
+                texts.append(f"Title={chart_desc['title']}")
 
-                    for s in chart_desc["series"]:
-                        texts.append(f"  Series[{s['index']}]")
+            if chart_desc["x_axis_title"]:
+                texts.append(f"X_Axis={chart_desc['x_axis_title']}")
 
-                        if s.get("title"):
-                            texts.append(f"    Name={s['title']}")
+            if chart_desc["y_axis_title"]:
+                texts.append(f"Y_Axis={chart_desc['y_axis_title']}")
 
-                        if s.get("values_ref"):
-                            texts.append(f"    Values={s['values_ref']}")
+            if chart_desc["style"] is not None:
+                texts.append(f"Style={chart_desc['style']}")
 
-                        if s.get("categories_ref"):
-                            texts.append(f"    Categories={s['categories_ref']}")
+            for s in chart_desc["series"]:
+                texts.append(f"  Series[{s['index']}]")
 
-            texts.append("")
+                if s.get("title"):
+                    texts.append(f"    Name={s['title']}")
+
+                if s.get("values_ref"):
+                    texts.append(f"    Values={s['values_ref']}")
+
+                if s.get("categories_ref"):
+                    texts.append(f"    Categories={s['categories_ref']}")
+
+        if "description" in chart_part.keys():
+            texts.append(f"Index {chart_part['chart_index']}")
+            texts.append(chart_part["description"])
+
+        texts.append("")
 
         return "\n".join(texts)
 
@@ -297,10 +390,7 @@ class ExcelStyleLoader(BaseLoader):
 
             # カテゴリ参照範囲
             if hasattr(series, "cat") and series.cat is not None:
-                cat_ref = (
-                    getattr(series.cat, "strRef", None)
-                    or getattr(series.cat, "numRef", None)
-                )
+                cat_ref = getattr(series.cat, "strRef", None) or getattr(series.cat, "numRef", None)
                 if cat_ref is not None and hasattr(cat_ref, "f"):
                     series_info["categories_ref"] = str(cat_ref.f)
 
@@ -321,9 +411,12 @@ class ExcelStyleLoader(BaseLoader):
 
 
 if __name__ == "__main__":
-    path = r"..\..\share\共有ドライブ\プロジェクト\株式会社青潮モビリティサービス\03.データ\train.xlsx"
+    path = (
+        r"..\..\share\共有ドライブ\プロジェクト\株式会社青潮モビリティサービス\03.データ\train.xlsx"
+    )
     loader = ExcelStyleLoader(path)
     docs = loader.load()
-    print(docs[0].metadata)
-    print(docs[0].page_content)
-    
+    for doc in docs[:-3]:
+        print(doc.metadata)
+        print(doc.page_content)
+        print("-------------------------")

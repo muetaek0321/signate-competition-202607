@@ -83,6 +83,7 @@ class ImageDocumentLoader(BaseLoader):
         ]
 
     def _describe_image(self, image: Image.Image | str) -> tuple[str, str]:
+        """画像説明を作成して画像保存"""
         if isinstance(image, Image.Image):
             image_base64 = self._image_to_bytes(image)
         else:
@@ -108,6 +109,19 @@ class ImageDocumentLoader(BaseLoader):
         joblib.dump(self.image_store, self.image_store_path)
 
         return response.content, image_store_id
+
+    def _store_image(self, image: Image.Image | str) -> str:
+        """画像の保存のみ"""
+        if isinstance(image, Image.Image):
+            image_base64 = self._image_to_bytes(image)
+        else:
+            image_base64 = image
+
+        image_store_id = f"{len(self.image_store.keys()):05}"
+        self.image_store[image_store_id] = image_base64
+        joblib.dump(self.image_store, self.image_store_path)
+
+        return image_store_id
 
     @staticmethod
     def _image_to_bytes(image: Image.Image) -> str:
