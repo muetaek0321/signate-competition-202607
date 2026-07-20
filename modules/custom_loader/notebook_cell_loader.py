@@ -109,22 +109,22 @@ class NotebookCellLoader(BaseLoader):
                                     extracted_images.append(img)
 
                 
-                if extracted_images:
-                    image_store_ids = []
-                    for img in extracted_images:
-                        response_date, image_store_id = ImageDocumentLoader(self.file_path)._describe_image(img)
-                        output_content += f"\n画像の情報：\n{response_date[1]['text']}"
-                        image_store_ids.append(image_store_id)
-                    metadata["image_store_ids"] = image_store_ids
+                    if extracted_images:
+                        image_store_ids = []
+                        for img in extracted_images:
+                            response_date, image_store_id = ImageDocumentLoader(self.file_path)._describe_image(img)
+                            output_content += f"\n画像の情報：\n{response_date[1]['text']}"
+                            image_store_ids.append(image_store_id)
+                        metadata["image_store_ids"] = image_store_ids
 
-                # 出力部分を格納
-                metadata = {"source": str(self.file_path), "cell_type": "output"}
-                docs.append(
-                    Document(
-                        page_content=output_content,
-                        metadata=metadata,
+                    # 出力部分を格納
+                    metadata = {"source": str(self.file_path), "cell_type": "output"}
+                    docs.append(
+                        Document(
+                            page_content=output_content,
+                            metadata=metadata,
+                        )
                     )
-                )
 
         return docs
     

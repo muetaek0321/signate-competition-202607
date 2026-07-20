@@ -32,6 +32,7 @@ class Response(BaseModel):
 class ResponseGenerator:
     def __init__(self, persist_directory):
         self.num_top_docs = 15
+        self.lambda_mult = 0.5
         self.input_messages = []
 
         # モデルのセットアップ
@@ -137,7 +138,7 @@ class ResponseGenerator:
                 query=query,
                 k=50,
                 fetch_k=150,
-                lambda_mult=0.5,
+                lambda_mult=self.lambda_mult,
                 filter={"source": {"$in": files}},
             )
         if len(csv_files) > 0:
@@ -145,7 +146,7 @@ class ResponseGenerator:
                 query=query,
                 k=30,
                 fetch_k=100,
-                lambda_mult=0.5,
+                lambda_mult=self.lambda_mult,
                 filter={"source": {"$in": csv_files}},
             )
         if len(excel_files) > 0:
@@ -153,7 +154,7 @@ class ResponseGenerator:
                 query=query,
                 k=30,
                 fetch_k=100,
-                lambda_mult=0.5,
+                lambda_mult=self.lambda_mult,
                 filter={"source": {"$in": excel_files}},
             )
 
@@ -162,7 +163,7 @@ class ResponseGenerator:
                 query=query,
                 k=100,
                 fetch_k=200,
-                lambda_mult=0.5,
+                lambda_mult=self.lambda_mult,
             )
         # BM25Retrieverから検索
         docs += self.bm25(query)
