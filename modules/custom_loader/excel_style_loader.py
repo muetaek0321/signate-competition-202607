@@ -9,12 +9,12 @@ from langchain_core.documents import Document
 from openpyxl import load_workbook
 from PIL import Image
 
-from modules.check_win32com import check_excel_com
+from modules.check_win32com import check_win32com
 
 from .image_file_loader import ImageDocumentLoader
 
 # win32comでExcelが使用可能かチェック
-IS_WIN32COM = check_excel_com()
+IS_WIN32COM = check_win32com(target="Excel")
 if IS_WIN32COM:
     import win32com.client
 
