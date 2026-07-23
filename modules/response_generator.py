@@ -26,13 +26,15 @@ AI_RESPONSE_FORMAT = """
 
 class Response(BaseModel):
     reason: str = Field(description="回答を導き出すための思考プロセスやコンテキスト中の根拠")
-    answer: str = Field(description="質問に対するシンプルかつ直接的な回答（情報不足の場合は「わかりません」と回答）")
+    answer: str = Field(
+        description="質問に対するシンプルかつ直接的な回答（情報不足の場合は「わかりません」と回答）"
+    )
 
 
 class ResponseGenerator:
     def __init__(self, persist_directory):
         self.num_top_docs = 15
-        self.lambda_mult = 0.5
+        self.lambda_mult = 0.3
         self.input_messages = []
 
         # モデルのセットアップ
@@ -112,9 +114,13 @@ class ResponseGenerator:
         # ファイル情報のベクトルDBから検索対象ファイルを取得
         file_info_docs = self.vectorstore_file_info.similarity_search(query=query, k=10)
         # 検索したファイル情報をリランキング
-        question_file_info_list = [(input_question, f"{doc.page_content}") for doc in file_info_docs]
+        question_file_info_list = [
+            (input_question, f"{doc.page_content}") for doc in file_info_docs
+        ]
         scores = self.reranker.predict(question_file_info_list)
-        reranked_file_info_docs = sorted(zip(file_info_docs, scores), key=lambda x: x[1], reverse=True)
+        reranked_file_info_docs = sorted(
+            zip(file_info_docs, scores), key=lambda x: x[1], reverse=True
+        )
         file_info_docs = [doc for doc, score in reranked_file_info_docs][:5]
 
         # 検索結果からファイルパスを拡張子ごとに取得
