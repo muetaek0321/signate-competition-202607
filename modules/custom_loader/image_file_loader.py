@@ -2,6 +2,7 @@ import base64
 import os
 from io import BytesIO
 from pathlib import Path
+from threading import Lock
 
 import joblib
 from dotenv import load_dotenv
@@ -13,6 +14,10 @@ from PIL import Image
 
 # 環境変数の読み込み
 load_dotenv()
+
+# image_store.joblib は複数の ImageDocumentLoader インスタンスから共有される。
+# PDF ローダーはページをスレッド並列で処理するため、採番から保存までを一括で排他する。
+_IMAGE_STORE_LOCK = Lock()
 
 PROMPT = """
 ファイル検索用のテキスト情報を収集します。指定した画像について、以下の形式に従って詳細に説明してください。
@@ -104,9 +109,7 @@ class ImageDocumentLoader(BaseLoader):
 
         response = self.llm.invoke([message])
 
-        image_store_id = f"{len(self.image_store.keys()):05}"
-        self.image_store[image_store_id] = image_base64
-        joblib.dump(self.image_store, self.image_store_path)
+        image_store_id = self._store_image(image_base64)
 
         return response.content, image_store_id
 
@@ -117,9 +120,19 @@ class ImageDocumentLoader(BaseLoader):
         else:
             image_base64 = image
 
-        image_store_id = f"{len(self.image_store.keys()):05}"
-        self.image_store[image_store_id] = image_base64
-        joblib.dump(self.image_store, self.image_store_path)
+        with _IMAGE_STORE_LOCK:
+            # インスタンス生成時に読んだ辞書は、他スレッドの保存より古い場合がある。
+            # 排他区間で最新の内容を読み直してから採番・保存する。
+            if self.image_store_path.exists():
+                image_store = joblib.load(self.image_store_path)
+            else:
+                image_store = {}
+
+            numeric_ids = (int(key) for key in image_store if key.isdigit())
+            image_store_id = f"{max(numeric_ids, default=-1) + 1:05}"
+            image_store[image_store_id] = image_base64
+            joblib.dump(image_store, self.image_store_path)
+            self.image_store = image_store
 
         return image_store_id
 

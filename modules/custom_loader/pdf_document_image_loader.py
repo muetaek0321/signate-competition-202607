@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from pathlib import Path
 
@@ -8,6 +9,8 @@ from PIL import Image
 
 from .image_file_loader import ImageDocumentLoader
 
+MAX_WORKERS = 10
+
 
 class PDFDocumentImageLoader(BaseLoader):
     """PDFの1ページごとのテキストデータと画像化データ格納するDocumentLoader"""
@@ -15,27 +18,31 @@ class PDFDocumentImageLoader(BaseLoader):
     def __init__(self, file_path: str | Path):
         self.file_path = Path(file_path)
 
+    def _process_page_image(self, image: Image.Image):
+        """1ページ分の画像説明を生成する（並列実行用）"""
+        response_date, image_store_id = ImageDocumentLoader(self.file_path)._describe_image(image)
+        description = response_date[1]["text"]
+        return description, image_store_id
+
     def load(self):
         # テキスト部分の読み込み
         docs = PyPDFLoader(self.file_path).load()
 
-        # PDF全体のデータ読み込み
+        # PDF全体のデータ読み込み - 各ページを画像化
         pdf_datas = fitz.open(self.file_path)
-        for page_doc, page_data in zip(docs, pdf_datas):
-            # PDFページを画像化
+        images = []
+        for page_data in pdf_datas:
             pix = page_data.get_pixmap()
             img_data = pix.tobytes("png")
-            image = Image.open(BytesIO(img_data))
+            images.append(Image.open(BytesIO(img_data)))
 
-            # 画像化したPDFの説明文を作成
-            response_date, image_store_id = ImageDocumentLoader(self.file_path)._describe_image(
-                image
-            )
-            description = response_date[1]["text"]
+        # ThreadPoolExecutorで画像説明を並列生成
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            results = list(executor.map(self._process_page_image, images))
 
-            # 説明文を追記
+        # 結果をdocsに反映
+        for page_doc, (description, image_store_id) in zip(docs, results):
             page_doc.page_content += "\n" + description
-            # メタデータに画像情報を追加
             page_doc.metadata["image_store_id"] = image_store_id
 
         return docs

@@ -11,7 +11,6 @@ import pandas as pd
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import (
-    CSVLoader,
     PythonLoader,
     TextLoader,
     UnstructuredPowerPointLoader,
@@ -24,6 +23,7 @@ from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
 
 from modules.check_office_password import is_password_protected, is_pdf_password_protected
 from modules.custom_loader import (
+    CsvChunkLoader,
     ExcelChunkLoader,
     ExcelStyleLoader,
     ImageDocumentLoader,
@@ -31,8 +31,9 @@ from modules.custom_loader import (
     NotebookCellLoader,
     PDFDocumentImageLoader,
     PowerPointStyleLoader,
+    PowerPointToPdfImageLoader,
     WordDocumentStyleLoader,
-    CsvChunkLoader
+    WordToPdfImageLoader,
 )
 from modules.file_info_format import FILE_INFO_FORMAT_INTERNAL, FILE_INFO_FORMAT_PROJECT
 
@@ -178,6 +179,7 @@ def main() -> None:
                 is_encrypted, docs = is_password_protected(path)
                 if not is_encrypted:
                     docs = UnstructuredWordDocumentLoader(path).load()
+                    docs += WordToPdfImageLoader(path).load()
                     docs += WordDocumentStyleLoader(path).load()
                     docs = text_splitter.split_documents(docs)
                 docs, ids = docs_ids(docs, path)
@@ -188,6 +190,7 @@ def main() -> None:
                 is_encrypted, docs = is_password_protected(path)
                 if not is_encrypted:
                     docs = UnstructuredPowerPointLoader(path).load()
+                    docs += PowerPointToPdfImageLoader(path).load()
                     docs += PowerPointStyleLoader(path).load()
                     docs = text_splitter.split_documents(docs)
                 docs, ids = docs_ids(docs, path)
