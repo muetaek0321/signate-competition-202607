@@ -22,6 +22,10 @@ class WordToPdfImageLoader(BaseLoader):
         self.temp_dir_path = Path(os.getenv("TEMP_DIR", "../../resource/temp"))
 
     def load(self) -> list[Document]:
+        # エラー回避
+        if not IS_WIN32COM:
+            return []
+        
         word = win32com.client.DispatchEx("Word.Application")
         word.Visible = False
         word.DisplayAlerts = 0

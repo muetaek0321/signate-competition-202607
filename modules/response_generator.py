@@ -33,7 +33,7 @@ class Response(BaseModel):
 
 class ResponseGenerator:
     def __init__(self, persist_directory):
-        self.num_top_docs = 15
+        self.num_top_docs = 10
         self.lambda_mult = 0.3
         self.input_messages = []
 

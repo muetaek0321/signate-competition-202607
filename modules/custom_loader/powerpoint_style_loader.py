@@ -1,15 +1,10 @@
 from __future__ import annotations
 
-from io import BytesIO
 from pathlib import Path
 
 from langchain_community.document_loaders.base import BaseLoader
 from langchain_core.documents import Document
-from PIL import Image
 from pptx import Presentation
-from pptx.enum.shapes import MSO_SHAPE_TYPE
-
-from .image_file_loader import ImageDocumentLoader
 
 
 class PowerPointStyleLoader(BaseLoader):
@@ -132,30 +127,6 @@ class PowerPointStyleLoader(BaseLoader):
                         }
                     )
 
-                ###################################################
-                # Picture
-                ###################################################
-
-                if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
-                    image = Image.open(BytesIO(shape.image.blob))
-
-                    response_data, image_store_id = ImageDocumentLoader(
-                        self.file_path
-                    )._describe_image(image)
-
-                    description = response_data[1]["text"]
-
-                    slide_parts.append(
-                        {
-                            "type": "image",
-                            "data": {
-                                "shape_index": shape_idx,
-                                "image_store_id": image_store_id,
-                                "description": description,
-                            },
-                        }
-                    )
-
             ###########################################################
             # Speaker Notes
             ###########################################################
@@ -181,14 +152,10 @@ class PowerPointStyleLoader(BaseLoader):
             # metadata
             ###########################################################
 
-            image_ids = [p["data"]["image_store_id"] for p in slide_parts if p["type"] == "image"]
-
             metadata = {
                 "source": str(self.file_path),
                 "slide_index": slide_idx,
                 "layout": slide.slide_layout.name,
-                "image_count": len(image_ids),
-                "image_store_ids": image_ids if image_ids else None,
             }
 
             docs.append(
@@ -265,15 +232,6 @@ class PowerPointStyleLoader(BaseLoader):
                 for row in part["data"]:
                     texts.append(" | ".join(row))
 
-                texts.append("")
-
-            ######################################################
-            # Image
-            ######################################################
-
-            elif part["type"] == "image":
-                texts.append("[IMAGE]")
-                texts.append(part["data"]["description"])
                 texts.append("")
 
         if notes_text:

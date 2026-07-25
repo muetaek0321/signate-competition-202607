@@ -17,10 +17,11 @@ class PDFDocumentImageLoader(BaseLoader):
 
     def __init__(self, file_path: str | Path):
         self.file_path = Path(file_path)
+        self.img_loader = ImageDocumentLoader(self.file_path)
 
     def _process_page_image(self, image: Image.Image):
         """1ページ分の画像説明を生成する（並列実行用）"""
-        response_date, image_store_id = ImageDocumentLoader(self.file_path)._describe_image(image)
+        response_date, image_store_id = self.img_loader._describe_image(image)
         description = response_date[1]["text"]
         return description, image_store_id
 

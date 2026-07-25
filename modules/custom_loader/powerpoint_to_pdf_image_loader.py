@@ -22,6 +22,10 @@ class PowerPointToPdfImageLoader(BaseLoader):
         self.temp_dir_path = Path(os.getenv("TEMP_DIR", "../../resource/temp"))
 
     def load(self) -> list[Document]:
+        # エラー回避
+        if not IS_WIN32COM:
+            return []
+        
         powerpoint = win32com.client.DispatchEx("PowerPoint.Application")
 
         pdf_docs = []

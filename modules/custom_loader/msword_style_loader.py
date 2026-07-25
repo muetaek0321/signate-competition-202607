@@ -1,12 +1,8 @@
-from io import BytesIO
 from pathlib import Path
 
 from docx import Document as WordDocument
 from langchain_community.document_loaders.base import BaseLoader
 from langchain_core.documents import Document
-from PIL import Image
-
-from .image_file_loader import ImageDocumentLoader
 
 
 class WordDocumentStyleLoader(BaseLoader):
@@ -108,44 +104,11 @@ class WordDocumentStyleLoader(BaseLoader):
             )
 
         ############################################
-        # Images
-        ############################################
-
-        image_idxes, image_store_ids = [], []
-        rels = doc.part.rels
-        image_index = 0
-        image_descriptions = []
-
-        for rel in rels.values():
-            if "image" not in rel.target_ref:
-                continue
-
-            image_bytes = rel.target_part.blob
-
-            image = Image.open(BytesIO(image_bytes))
-
-            response_date, image_store_id = ImageDocumentLoader(self.file_path)._describe_image(
-                image
-            )
-            description = response_date[1]["text"]
-
-            image_idxes.append(image_index)
-            image_store_ids.append(image_store_id)
-            image_descriptions.append({"image_index": image_index, "description": description})
-
-            image_index += 1
-
-        parts.append({"type": "image", "data": image_descriptions})
-
-        ############################################
 
         metadata = {
             "source": str(self.file_path),
             "paragraph_count": len(doc.paragraphs),
             "table_count": len(doc.tables),
-            "image_count": len(image_idxes),
-            "image_idxes": image_idxes if len(image_idxes) > 0 else None,
-            "image_store_ids": image_store_ids if len(image_store_ids) > 0 else None,
         }
 
         style_docs.append(
@@ -176,15 +139,6 @@ class WordDocumentStyleLoader(BaseLoader):
 
                 for row in part["data"]["rows"]:
                     texts.append(" | ".join(row))
-
-                texts.append("")
-
-            elif part["type"] == "image":
-                texts.append("[IMAGE]")
-
-                for desc in part["data"]:
-                    texts.append(f"Index {desc['image_index']}")
-                    texts.append(desc["description"])
 
                 texts.append("")
 

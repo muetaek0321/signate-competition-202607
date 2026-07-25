@@ -45,193 +45,203 @@ class ExcelStyleLoader(BaseLoader):
 
     def __init__(self, file_path: str | Path):
         self.file_path = Path(file_path)
-        if IS_WIN32COM:
-            self.excel = win32com.client.Dispatch("Excel.Application")
-            self.excel.Visible = False
-            self.excel.DisplayAlerts = False
 
     def load(self) -> list[Document]:
+        excel = None
+        wb_com = None
 
-        wb = load_workbook(
-            self.file_path,
-            data_only=False,
-        )
-
-        if IS_WIN32COM:
-            wb_com = self.excel.Workbooks.Open(
-                self.file_path.absolute(),
+        try:
+            wb = load_workbook(
+                self.file_path,
+                data_only=False,
             )
 
-        img_loader = ImageDocumentLoader(self.file_path)
+            if IS_WIN32COM:
+                # ExcelのCOMオブジェクトを作成
+                excel = win32com.client.Dispatch("Excel.Application")
+                excel.Visible = False
+                excel.DisplayAlerts = False
+                # Excelファイルを開く
+                wb_com = excel.Workbooks.Open(
+                    self.file_path.absolute(),
+                )
 
-        style_docs = []
-        for ws in wb.worksheets:
-            sheet_parts = []
-            image_parts = []
-            chart_parts = []
+            img_loader = ImageDocumentLoader(self.file_path)
 
-            ###########################################################
-            # セル
-            ###########################################################
+            style_docs = []
+            for ws in wb.worksheets:
+                sheet_parts = []
+                image_parts = []
+                chart_parts = []
 
-            for row in ws.iter_rows():
-                for cell in row:
-                    if cell.value is None:
-                        continue
+                ###########################################################
+                # セル
+                ###########################################################
 
-                    font_color = None
-                    if cell.font.color and cell.font.color.type == "rgb":
-                        font_color = cell.font.color.rgb
+                for row in ws.iter_rows():
+                    for cell in row:
+                        if cell.value is None:
+                            continue
 
-                    fill_color = None
-                    if cell.fill.fill_type == "solid" and cell.fill.fgColor.type == "rgb":
-                        fill_color = cell.fill.fgColor.rgb
+                        font_color = None
+                        if cell.font.color and cell.font.color.type == "rgb":
+                            font_color = cell.font.color.rgb
 
-                    cell_info = {
-                        "coordinate": cell.coordinate,
-                        "row": cell.row,
-                        "column": cell.column,
-                        "value": str(cell.value),
-                        "style": cell.style_id,
-                        "font_name": cell.font.name,
-                        "font_size": (cell.font.sz if cell.font.sz else None),
-                        "bold": cell.font.bold,
-                        "italic": cell.font.italic,
-                        "underline": cell.font.underline,
-                        "font_color": font_color,
-                        "fill_color": fill_color,
-                        "alignment": {
-                            "horizontal": cell.alignment.horizontal,
-                            "vertical": cell.alignment.vertical,
-                            "wrap_text": cell.alignment.wrap_text,
-                        },
-                        "comment": (cell.comment.text if cell.comment else None),
-                        "hyperlink": (cell.hyperlink.target if cell.hyperlink else None),
-                    }
+                        fill_color = None
+                        if cell.fill.fill_type == "solid" and cell.fill.fgColor.type == "rgb":
+                            fill_color = cell.fill.fgColor.rgb
 
-                    sheet_parts.append(
+                        cell_info = {
+                            "coordinate": cell.coordinate,
+                            "row": cell.row,
+                            "column": cell.column,
+                            "value": str(cell.value),
+                            "style": cell.style_id,
+                            "font_name": cell.font.name,
+                            "font_size": (cell.font.sz if cell.font.sz else None),
+                            "bold": cell.font.bold,
+                            "italic": cell.font.italic,
+                            "underline": cell.font.underline,
+                            "font_color": font_color,
+                            "fill_color": fill_color,
+                            "alignment": {
+                                "horizontal": cell.alignment.horizontal,
+                                "vertical": cell.alignment.vertical,
+                                "wrap_text": cell.alignment.wrap_text,
+                            },
+                            "comment": (cell.comment.text if cell.comment else None),
+                            "hyperlink": (cell.hyperlink.target if cell.hyperlink else None),
+                        }
+
+                        sheet_parts.append(
+                            {
+                                "type": "cell",
+                                "data": cell_info,
+                            }
+                        )
+
+                ###########################################################
+                # 結合セル
+                ###########################################################
+
+                merged_cells = [str(rng) for rng in ws.merged_cells.ranges]
+
+                ###########################################################
+                # 画像
+                ###########################################################
+
+                for index, img in enumerate(ws._images):
+                    image_bytes = img._data()
+
+                    image = Image.open(BytesIO(image_bytes))
+
+                    response_data, image_store_id = img_loader._describe_image(image)
+                    description = response_data[1]["text"]
+
+                    image_parts.append(
                         {
-                            "type": "cell",
-                            "data": cell_info,
+                            "image_index": index,
+                            "image_store_id": image_store_id,
+                            "description": description,
                         }
                     )
 
-            ###########################################################
-            # 結合セル
-            ###########################################################
+                ###########################################################
+                # グラフ
+                ###########################################################
 
-            merged_cells = [str(rng) for rng in ws.merged_cells.ranges]
+                if IS_WIN32COM:
+                    # グラフを画像化して説明を追加
+                    ws_com = wb_com.Worksheets(ws.title)
+                    chart_objects = ws_com.ChartObjects()
 
-            ###########################################################
-            # 画像
-            ###########################################################
+                    if chart_objects.Count > 0:
+                        for index in range(1, chart_objects.Count + 1):
+                            chart_object = chart_objects.Item(index)
 
-            for index, img in enumerate(ws._images):
-                image_bytes = img._data()
+                            with tempfile.NamedTemporaryFile(
+                                suffix=".png",
+                                delete=False,
+                            ) as tmp:
+                                png_path = tmp.name
 
-                image = Image.open(BytesIO(image_bytes))
+                                # PNGへ保存
+                                chart_object.Chart.Export(
+                                    Filename=png_path,
+                                    FilterName="PNG",
+                                )
 
-                response_data, image_store_id = img_loader._describe_image(image)
-                description = response_data[1]["text"]
+                                # PILへ読み込み
+                                with Image.open(png_path) as img:
+                                    image = img.copy()
 
-                image_parts.append(
-                    {
-                        "image_index": index,
-                        "image_store_id": image_store_id,
-                        "description": description,
-                    }
-                )
+                                # 画像保存
+                                response_data, image_store_id = img_loader._describe_image(image)
+                                description = response_data[1]["text"]
 
-            ###########################################################
-            # グラフ
-            ###########################################################
-
-            if IS_WIN32COM:
-                # グラフを画像化して説明を追加
-                ws_com = wb_com.Worksheets(ws.title)
-                chart_objects = ws_com.ChartObjects()
-
-                if chart_objects.Count > 0:
-                    for index in range(1, chart_objects.Count + 1):
-                        chart_object = chart_objects.Item(index)
-
-                        with tempfile.NamedTemporaryFile(
-                            suffix=".png",
-                            delete=False,
-                        ) as tmp:
-                            png_path = tmp.name
-
-                            # PNGへ保存
-                            chart_object.Chart.Export(
-                                Filename=png_path,
-                                FilterName="PNG",
-                            )
-
-                            # PILへ読み込み
-                            with Image.open(png_path) as img:
-                                image = img.copy()
-
-                            # 画像保存
-                            response_data, image_store_id = img_loader._describe_image(image)
-                            description = response_data[1]["text"]
-
-                            chart_parts.append(
-                                {
-                                    "chart_index": index - 1,
-                                    "description": description,
-                                    "image_store_id": image_store_id,
-                                }
-                            )
-            else:
-                # グラフ情報を取得できるもののみ情報記録
-                for chart_index, chart in enumerate(ws._charts):
-                    chart_info = self._extract_chart_info(chart, chart_index)
-                    chart_parts.append({"chart_index": index, "chart_info": chart_info})
-
-            ###########################################################
-            # metadata
-            ###########################################################
-
-            metadata = {
-                "source": str(self.file_path),
-                "sheet_name": ws.title,
-                "sheet_state": ws.sheet_state,
-                "max_row": ws.max_row,
-                "max_column": ws.max_column,
-                "merged_cells": merged_cells if len(merged_cells) > 0 else None,
-            }
-
-            style_docs.append(
-                Document(
-                    page_content=self._build_text(
-                        ws.title,
-                        sheet_parts,
-                        merged_cells,
-                    ),
-                    metadata=metadata,
-                )
-            )
-
-            # 画像のデータを個別にDodument化して保存
-            for image_part in image_parts:
-                style_docs.append(
-                    Document(
-                        page_content=self._build_image_text(ws.title, image_part),
-                        metadata=metadata | {"image_store_id": image_part["image_store_id"]},
-                    )
-                )
-            # グラフのデータを個別にDodument化して保存
-            for chart_part in chart_parts:
-                if "image_store_id" in chart_part:
-                    chart_metadata = metadata | {"image_store_id": chart_part["image_store_id"]}
+                                chart_parts.append(
+                                    {
+                                        "chart_index": index - 1,
+                                        "description": description,
+                                        "image_store_id": image_store_id,
+                                    }
+                                )
                 else:
-                    chart_metadata = metadata
+                    # グラフ情報を取得できるもののみ情報記録
+                    for chart_index, chart in enumerate(ws._charts):
+                        chart_info = self._extract_chart_info(chart, chart_index)
+                        chart_parts.append({"chart_index": index, "chart_info": chart_info})
+
+                ###########################################################
+                # metadata
+                ###########################################################
+
+                metadata = {
+                    "source": str(self.file_path),
+                    "sheet_name": ws.title,
+                    "sheet_state": ws.sheet_state,
+                    "max_row": ws.max_row,
+                    "max_column": ws.max_column,
+                    "merged_cells": merged_cells if len(merged_cells) > 0 else None,
+                }
+
                 style_docs.append(
                     Document(
-                        page_content=self._build_chart_text(ws.title, chart_part),
-                        metadata=chart_metadata,
+                        page_content=self._build_text(
+                            ws.title,
+                            sheet_parts,
+                            merged_cells,
+                        ),
+                        metadata=metadata,
                     )
                 )
+
+                # 画像のデータを個別にDodument化して保存
+                for image_part in image_parts:
+                    style_docs.append(
+                        Document(
+                            page_content=self._build_image_text(ws.title, image_part),
+                            metadata=metadata | {"image_store_id": image_part["image_store_id"]},
+                        )
+                    )
+                # グラフのデータを個別にDodument化して保存
+                for chart_part in chart_parts:
+                    if "image_store_id" in chart_part:
+                        chart_metadata = metadata | {"image_store_id": chart_part["image_store_id"]}
+                    else:
+                        chart_metadata = metadata
+                    style_docs.append(
+                        Document(
+                            page_content=self._build_chart_text(ws.title, chart_part),
+                            metadata=chart_metadata,
+                        )
+                    )
+        finally:
+            if IS_WIN32COM:
+                if wb_com is not None:
+                    wb_com.Close(False)
+                if excel is not None:
+                    excel.Quit()
 
         return style_docs
 
