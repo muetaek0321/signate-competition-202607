@@ -17,8 +17,6 @@ from langchain_community.document_loaders import (
     UnstructuredWordDocumentLoader,
 )
 from langchain_core.documents import Document
-from langchain_huggingface.embeddings import HuggingFaceEmbeddings
-from langchain_ollama.embeddings import OllamaEmbeddings
 from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
 
 from modules.check_office_password import is_password_protected, is_pdf_password_protected
@@ -35,6 +33,7 @@ from modules.custom_loader import (
     WordDocumentStyleLoader,
     WordToPdfImageLoader,
 )
+from modules.embedding_models import get_embedding
 from modules.file_info_format import FILE_INFO_FORMAT_INTERNAL, FILE_INFO_FORMAT_PROJECT
 
 # 環境変数の読み込み
@@ -83,16 +82,7 @@ def main() -> None:
     )
 
     # ベクトル化する準備
-    embedding_mode = os.getenv("EMBEDDING_MODE", "huggingface")
-    if embedding_mode == "huggingface":
-        embedding = HuggingFaceEmbeddings(
-            model_name=os.getenv("EMBEDDING_MODEL_NAME", None),
-            model_kwargs={"device": "cuda", "trust_remote_code": True},
-        )
-    elif embedding_mode == "ollama":
-        embedding = OllamaEmbeddings(model=os.getenv("EMBEDDING_MODEL_NAME", None))
-    else:
-        raise ValueError(f"Invalid EMBEDDING_MODE: {embedding_mode}")
+    embedding = get_embedding()
 
     # 全ファイルを読み込みリスト化
     vectorstores = {
@@ -300,16 +290,7 @@ if __name__ == "__main__":
     # test
     query = "恒一会 かえで総合病院の提案書内で、重視するとされている評価指標を答えてください。"
 
-    embedding_mode = os.getenv("EMBEDDING_MODE", "huggingface")
-    if embedding_mode == "huggingface":
-        embedding = HuggingFaceEmbeddings(
-            model_name=os.getenv("EMBEDDING_MODEL_NAME", None),
-            model_kwargs={"device": "cuda", "trust_remote_code": True},
-        )
-    elif embedding_mode == "ollama":
-        embedding = OllamaEmbeddings(model=os.getenv("EMBEDDING_MODEL_NAME", None))
-    else:
-        raise ValueError(f"Invalid EMBEDDING_MODE: {embedding_mode}")
+    embedding = get_embedding()
 
     # ベクトルDBから検索
     vectorstore = Chroma(

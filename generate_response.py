@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 
 from modules.response_generator import ResponseGenerator
 
+# from modules.response_generator_test import ResponseGenerator
+
 # 環境変数の読み込み
 load_dotenv()
 

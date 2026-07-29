@@ -6,15 +6,15 @@ os.environ["HF_HOME"] = "./resource/pretrained"  # 事前学習モデルの保�
 
 import joblib
 from langchain_chroma import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_ollama import ChatOllama
-from langchain_ollama.embeddings import OllamaEmbeddings
 from pydantic import BaseModel, Field
 from sentence_transformers import CrossEncoder
 
 from modules.bm25_search import BM25DocumentSearch
+from modules.embedding_models import get_embedding
+from modules.filepath_filter import FilePathFilter
 from modules.generate_query import QueryGenerator
 from modules.rag_prompt import RAG_PROMPT_TEMPLATE
 
@@ -33,7 +33,7 @@ class Response(BaseModel):
 
 class ResponseGenerator:
     def __init__(self, persist_directory):
-        self.num_top_docs = 10
+        self.num_top_docs = 20
         self.lambda_mult = 0.3
         self.input_messages = []
 
@@ -61,16 +61,7 @@ class ResponseGenerator:
             self.llm = self.llm.with_structured_output(Response)
 
         # Embeddingモデルの読み込み
-        embedding_mode = os.getenv("EMBEDDING_MODE", "huggingface")
-        if embedding_mode == "huggingface":
-            self.embedding = HuggingFaceEmbeddings(
-                model_name=os.getenv("EMBEDDING_MODEL_NAME", None),
-                model_kwargs={"device": "cuda", "trust_remote_code": True},
-            )
-        elif embedding_mode == "ollama":
-            self.embedding = OllamaEmbeddings(model=os.getenv("EMBEDDING_MODEL_NAME", None))
-        else:
-            raise ValueError(f"Invalid EMBEDDING_MODE: {embedding_mode}")
+        self.embedding = get_embedding()
 
         # ベクトルDBの読み込み
         self.vectorstore_all = Chroma(
@@ -104,6 +95,9 @@ class ResponseGenerator:
         # 検索クエリ作成モデルの読み込み
         self.query_gen = QueryGenerator()
 
+        # ファイルパス抽出モデルの読み込み
+        self.path_filter = FilePathFilter()
+
         # 画像データのキャッシュの読み込み
         self.image_store = joblib.load(persist_directory / "image_store.joblib")
 
@@ -112,7 +106,7 @@ class ResponseGenerator:
         query = self.query_gen(input_question)
 
         # ファイル情報のベクトルDBから検索対象ファイルを取得
-        file_info_docs = self.vectorstore_file_info.similarity_search(query=query, k=10)
+        file_info_docs = self.vectorstore_file_info.similarity_search(query=query, k=20)
         # 検索したファイル情報をリランキング
         question_file_info_list = [
             (input_question, f"{doc.page_content}") for doc in file_info_docs
@@ -121,12 +115,16 @@ class ResponseGenerator:
         reranked_file_info_docs = sorted(
             zip(file_info_docs, scores), key=lambda x: x[1], reverse=True
         )
-        file_info_docs = [doc for doc, score in reranked_file_info_docs][:5]
+        file_info_docs = [doc for doc, score in reranked_file_info_docs]
+
+        # LLMによるファイルパスの絞り込みを適用
+        sources = self.path_filter(input_question, query, file_info_docs)
+        if len(sources) == 0:
+            sources = [doc.metadata["source"] for doc in file_info_docs][:5]
 
         # 検索結果からファイルパスを拡張子ごとに取得
         files, csv_files, excel_files = [], [], []
-        for doc in file_info_docs:
-            source = doc.metadata["source"]
+        for source in sources:
             ext = Path(source).suffix
             if ext == ".csv":
                 csv_files.append(source)
