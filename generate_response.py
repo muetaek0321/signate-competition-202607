@@ -1,3 +1,4 @@
+import json
 import os
 import time
 from argparse import ArgumentParser
@@ -19,20 +20,28 @@ load_dotenv()
 
 def main() -> None:
     parser = ArgumentParser()
-    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("-n", "--num-top-docs", type=int, default=20)
+    parser.add_argument("-lm", "--lambda-mult", type=float, default=0.3)
+    parser.add_argument("-p", "--output-path", type=str, default="results")
+    parser.add_argument("-r", "--resume", action="store_true")
     args = parser.parse_args()
+    print(json.dumps(vars(args), indent=2, ensure_ascii=False))
 
     persist_directory = Path(os.getenv("DATASET_DIR", "./resource/chroma"))
 
     # 出力先フォルダの作成
-    output_path = Path("./results")
+    output_path = Path(args.output_path)
     output_path.mkdir(exist_ok=True)
 
     # 質問データの読み込み
     question_df = pd.read_csv("./share/質問回答/questions_test.csv", encoding="utf-8")
 
     # ResponseGeneratorのインスタンス化
-    response_generator = ResponseGenerator(persist_directory)
+    response_generator = ResponseGenerator(
+        persist_directory=persist_directory,
+        num_top_docs=args.num_top_docs,
+        lambda_mult=args.lambda_mult,
+    )
 
     # 途中再開か新規作成かで分岐
     if args.resume:

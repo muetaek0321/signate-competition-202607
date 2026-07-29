@@ -16,7 +16,33 @@ from modules.bm25_search import BM25DocumentSearch
 from modules.embedding_models import get_embedding
 from modules.filepath_filter import FilePathFilter
 from modules.generate_query import QueryGenerator
-from modules.rag_prompt import RAG_PROMPT_TEMPLATE
+
+RAG_PROMPT_TEMPLATE = """
+あなたは正確で信頼できるドキュメントQAアシスタントです。
+与えられたコンテキスト（共有フォルダ内のドキュメント情報や画像データなど）のみを根拠として、ユーザの質問に日本語で回答してください。
+
+# 🚨 【厳守】絶対的な制約事項（以下のルールに違反した出力はシステムエラーとなります）🚨
+
+1. 【コンテキスト依存の絶対ルール】
+   - 回答は提供されたコンテキストの情報のみに基づいてください。
+   - あなた自身の事前知識、一般的な事実、推論で情報を補うことは絶対に禁止します。
+   - コンテキストに記載がないことは絶対に回答に含めないでください。
+   - 前置きなどは不要でシンプルに求められている情報のみを回答として提示してください。
+
+2. 【情報不足時の絶対ルール】
+   - コンテキストから確実な回答が導き出せない場合、または情報が部分的にしか存在せず完全に答えられない場合は、決して推測してはいけません。
+   - そのような場合、`answer` の値は必ず「わかりません」という文字列にしてください。
+
+3. 【出力フォーマットの絶対ルール】
+   - 出力は必ず下記のJSONフォーマットのみとしてください。
+   - Markdown記法（```json や ``` など）、挨拶、前置き、後書きなどの余分なテキストは一切出力しないでください。最初から最後までJSONのみを出力してください。
+
+# 出力JSONフォーマット
+{
+  "reason": "回答を導き出すための思考プロセスや、コンテキスト中の根拠の有無とその評価",
+  "answer": "質問に対するシンプルかつ直接的な回答（情報不足の場合は「わかりません」と回答）"
+}
+"""
 
 AI_RESPONSE_FORMAT = """
 回答: {answer}
@@ -32,9 +58,19 @@ class Response(BaseModel):
 
 
 class ResponseGenerator:
-    def __init__(self, persist_directory):
-        self.num_top_docs = 20
-        self.lambda_mult = 0.3
+    def __init__(
+        self, persist_directory: str | Path, num_top_docs: int = 20, lambda_mult: float = 0.3
+    ) -> None:
+        """初期化
+
+        Args:
+            persist_directory(str | Path): ベクトルDBのパス
+            num_top_docs(int): 採用するドキュメント数
+            lambda_mult(float): MMR検索のlambda_multの値
+        """
+
+        self.num_top_docs = num_top_docs
+        self.lambda_mult = lambda_mult
         self.input_messages = []
 
         # モデルのセットアップ
@@ -47,14 +83,9 @@ class ResponseGenerator:
                 api_key=os.getenv("OLLAMA_API_KEY", None),
                 temperature=0.0,
             )
-            ## ローカルLLMを使用
-            # llm = ChatOllama(
-            #     model=os.getenv("OLLAMA_MODEL_NAME", "gpt-oss:120b"),
-            #     temperature=0.0,
-            # )
         elif self.generate_mode == "gemini":
             self.llm = ChatGoogleGenerativeAI(
-                model=os.getenv("GEMINI_MODEL_NAME", "models/gemini-3.1-flash-lite"),
+                model=os.getenv("GEMINI_MODEL_NAME", "models/gemini-3.5-flash-lite"),
                 temperature=0.0,
                 thinking_budget=4096,
             )
