@@ -20,6 +20,7 @@ from langchain_core.documents import Document
 from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
 
 from modules.check_office_password import is_password_protected, is_pdf_password_protected
+from modules.create_file_info import FileInfoCreator
 from modules.custom_loader import (
     CsvChunkLoader,
     ExcelChunkLoader,
@@ -34,7 +35,6 @@ from modules.custom_loader import (
     WordToPdfImageLoader,
 )
 from modules.embedding_models import get_embedding
-from modules.file_info_format import FILE_INFO_FORMAT_INTERNAL, FILE_INFO_FORMAT_PROJECT
 
 # 環境変数の読み込み
 load_dotenv()
@@ -53,6 +53,9 @@ def docs_ids(docs: list[Document], base_path: Path) -> tuple[list[Document], lis
 
 def main() -> None:
     persist_directory = Path(os.getenv("DATASET_DIR", "./resource/chroma"))
+
+    # ファイル情報作成
+    file_info_creator = FileInfoCreator()
 
     # ファイル情報のリストを読み込み
     file_info_list_path = persist_directory / "file_info_list.csv"
@@ -252,23 +255,7 @@ def main() -> None:
         )
 
         # ファイル情報のベクトル化
-        path_parts = path.parts
-        if path_parts[2] == "プロジェクト":
-            file_info_str = FILE_INFO_FORMAT_PROJECT.format(
-                filepath=str(path),
-                filename=path.name,
-                extension=path.suffix,
-                directory_type=path_parts[2],
-                company_name=path_parts[3],
-                category=path_parts[4],
-            )
-        else:
-            file_info_str = FILE_INFO_FORMAT_INTERNAL.format(
-                filepath=str(path),
-                filename=path.name,
-                extension=path.suffix,
-                directory_type=path_parts[2],
-            )
+        file_info_str = file_info_creator(path)
         file_info_doc = Document(
             page_content=file_info_str,
             metadata={

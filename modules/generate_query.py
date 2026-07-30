@@ -40,7 +40,7 @@ class QueryGenerator:
         self.llm = ChatGoogleGenerativeAI(model="models/gemma-4-31b-it", temperature=0.0)
 
         # 社内用語集を読み込み
-        glossary_path = "./share/共有ドライブ/社内管理/社内用語集.docx"
+        glossary_path = "./resource/社内用語集.docx"
         word_doc = UnstructuredWordDocumentLoader(glossary_path).load()
         self.glossary = word_doc[0].page_content
 
