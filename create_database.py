@@ -236,39 +236,42 @@ def main() -> None:
             else:
                 print("  未対応拡張子のためスキップ")
                 continue
+
+            # ファイルの情報を記録してファイル情報をCSVで保存
+            file_info_dict["path"].append(str(path))
+            file_info_dict["name"].append(path.name)
+            file_info_dict["extension"].append(ext)
+            file_info_df = pd.DataFrame(file_info_dict)
+            file_info_df.to_csv(
+                file_info_list_path,
+                encoding="utf-8-sig",
+                index=None,
+            )
+
+            # ファイル情報のベクトル化
+            file_info_str = file_info_creator(path)
+            file_info_doc = Document(
+                page_content=file_info_str,
+                metadata={
+                    "source": str(path),
+                    "directory": str(path.parent),
+                    "extension": path.suffix,
+                    "is_encrypted": is_encrypted,
+                },
+            )
+            vectorstores["shared_folder_file_info_list"].add_documents(
+                [file_info_doc], ids=[str(path)]
+            )
+
+            # Documentをjoblibで保存
+            joblib.dump(all_docs, all_docs_cache_path)
+
         except Exception as e:
             print(f"  読み込みエラーのためスキップ: {e}")
             error_logs.append({"file": str(path), "traceback": traceback.format_exc()})
             with open(persist_directory / "error_log.json", "w", encoding="utf-8") as f:
                 json.dump(error_logs, f, ensure_ascii=False, indent=2)
             continue
-
-        # ファイルの情報を記録してファイル情報をCSVで保存
-        file_info_dict["path"].append(str(path))
-        file_info_dict["name"].append(path.name)
-        file_info_dict["extension"].append(ext)
-        file_info_df = pd.DataFrame(file_info_dict)
-        file_info_df.to_csv(
-            file_info_list_path,
-            encoding="utf-8-sig",
-            index=None,
-        )
-
-        # ファイル情報のベクトル化
-        file_info_str = file_info_creator(path)
-        file_info_doc = Document(
-            page_content=file_info_str,
-            metadata={
-                "source": str(path),
-                "directory": str(path.parent),
-                "extension": path.suffix,
-                "is_encrypted": is_encrypted,
-            },
-        )
-        vectorstores["shared_folder_file_info_list"].add_documents([file_info_doc], ids=[str(path)])
-
-        # Documentをjoblibで保存
-        joblib.dump(all_docs, all_docs_cache_path)
 
 
 if __name__ == "__main__":
