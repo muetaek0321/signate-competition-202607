@@ -2,6 +2,7 @@ import os
 
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_core.embeddings import Embeddings
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_ollama.embeddings import OllamaEmbeddings
 
 
@@ -18,6 +19,10 @@ def get_embedding() -> Embeddings:
         )
     elif embedding_mode == "ollama":
         embedding = OllamaEmbeddings(model=os.getenv("EMBEDDING_MODEL_NAME", None))
+    elif embedding_mode == "gemini":
+        embedding = GoogleGenerativeAIEmbeddings(
+            model=os.getenv("EMBEDDING_MODEL_NAME", None), output_dimensionality=1536 * 2
+        )
     else:
         raise ValueError(f"Invalid EMBEDDING_MODE: {embedding_mode}")
 
